@@ -1,0 +1,21 @@
+Changes
+CONTRIBUTING.md
+lib/Minion.pm
+lib/Minion/Command/minion.pm
+lib/Minion/Command/minion/worker.pm
+lib/Minion/Job.pm
+lib/Minion/Worker.pm
+lib/Mojolicious/Plugin/Minion.pm
+LICENSE
+Makefile.PL
+MANIFEST			This list of files
+MANIFEST.SKIP
+README.md
+t/commands.t
+t/jobs.t
+t/minion_lite_app.t
+t/pod.t
+t/pod_coverage.t
+t/workers.t
+META.yml                                 Module YAML meta-data (added by MakeMaker)
+META.json                                Module JSON meta-data (added by MakeMaker)
