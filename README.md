@@ -1,5 +1,5 @@
 
-# Minion [![Build Status](https://secure.travis-ci.org/kraih/minion.png)](http://travis-ci.org/kraih/minion)
+# Minion [![Build Status](https://travis-ci.org/kraih/minion.svg?branch=master)](https://travis-ci.org/kraih/minion)
 
   A [Mango](https://github.com/kraih/mango) job queue for the
   [Mojolicious](http://mojolicio.us) real-time web framework.
@@ -14,7 +14,7 @@ plugin Minion => {uri => $uri};
 app->minion->add_task(slow_log => sub {
   my ($job, $msg) = @_;
   sleep 5;
-  $job->worker->minion->app->log->debug(qq{Received message "$msg".});
+  $job->app->log->debug(qq{Received message "$msg".});
 });
 
 # Perform job in a background process
@@ -27,7 +27,7 @@ get '/' => sub {
 app->start;
 ```
 
-  And just start a background worker process in addition to your web server.
+  Just start a background worker process in addition to your web server.
 
     $ ./myapp.pl minion worker
 

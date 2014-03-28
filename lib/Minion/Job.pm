@@ -3,6 +3,8 @@ use Mojo::Base -base;
 
 has [qw(doc worker)];
 
+sub app { shift->worker->minion->app }
+
 sub fail { shift->_update(shift // 'Unknown error.') }
 
 sub finish { shift->_update }
@@ -32,8 +34,9 @@ sub _child {
 
 sub _update {
   my ($self, $err) = @_;
-  $self->worker->minion->jobs->save(
-    {%{$self->doc}, state => $err ? ('failed', error => $err) : 'finished'});
+  my $doc = $self->doc;
+  $self->worker->minion->jobs->update({_id => $doc->{_id}, state => 'active'},
+    {%$doc, state => $err ? ('failed', error => $err) : 'finished'});
   return $self;
 }
 
@@ -77,6 +80,15 @@ L<Minion::Worker> object this job belongs to.
 
 L<Minion::Job> inherits all methods from L<Mojo::Base> and implements the
 following new ones.
+
+=head2 app
+
+  my $app = $job->app;
+
+Get application from L<Minion/"app">.
+
+  # Longer version
+  my $app = $job->worker->minion->app;
 
 =head2 fail
 

@@ -5,6 +5,7 @@ use Test::More;
 plan skip_all => 'set TEST_ONLINE to enable this test'
   unless $ENV{TEST_ONLINE};
 
+use Mango::BSON 'bson_time';
 use Minion;
 
 # Clean up before start
@@ -28,6 +29,37 @@ $minion->add_task(
 $minion->add_task(exit => sub { exit 1 });
 $minion->add_task(fail => sub { die "Intentional failure!\n" });
 
+# Stats
+my $stats = $minion->stats;
+is $stats->{active_workers},   0, 'no active workers';
+is $stats->{inactive_workers}, 0, 'no inactive workers';
+is $stats->{active_jobs},      0, 'no active jobs';
+is $stats->{failed_jobs},      0, 'no failed jobs';
+is $stats->{finished_jobs},    0, 'no finished jobs';
+is $stats->{inactive_jobs},    0, 'no inactive jobs';
+my $worker = $minion->worker->register;
+is $minion->stats->{inactive_workers}, 1, 'one inactive worker';
+$minion->enqueue('fail');
+$minion->enqueue('fail');
+is $minion->stats->{inactive_jobs}, 2, 'two inactive jobs';
+my $job = $worker->dequeue;
+$stats = $minion->stats;
+is $stats->{active_workers}, 1, 'one active worker';
+is $stats->{active_jobs},    1, 'one active job';
+is $stats->{inactive_jobs},  1, 'one inactive job';
+$job->finish;
+is $minion->stats->{finished_jobs}, 1, 'one finished job';
+$worker->dequeue->fail;
+is $minion->stats->{failed_jobs}, 1, 'one failed job';
+$worker->unregister;
+$stats = $minion->stats;
+is $stats->{active_workers},   0, 'no active workers';
+is $stats->{inactive_workers}, 0, 'no inactive workers';
+is $stats->{active_jobs},      0, 'no active jobs';
+is $stats->{failed_jobs},      1, 'one failed job';
+is $stats->{finished_jobs},    1, 'one finished job';
+is $stats->{inactive_jobs},    0, 'no inactive jobs';
+
 # Enqueue, dequeue and perform
 my $oid = $minion->enqueue(add => [2, 2]);
 my $doc = $jobs->find_one({task => 'add'});
@@ -36,9 +68,9 @@ is_deeply $doc->{args}, [2, 2], 'right arguments';
 ok $doc->{created}->to_epoch, 'has timestamp';
 is $doc->{priority}, 0,          'right priority';
 is $doc->{state},    'inactive', 'right state';
-my $worker = $minion->worker;
+$worker = $minion->worker;
 is $worker->dequeue, undef, 'not registered';
-my $job = $worker->register->dequeue;
+$job = $worker->register->dequeue;
 is_deeply $job->doc->{args}, [2, 2], 'right arguments';
 is $job->doc->{state}, 'active', 'right state';
 is $job->doc->{task},  'add',    'right task';
@@ -55,6 +87,17 @@ $job = $worker->register->dequeue;
 is $job->doc->{_id}, $oid, 'right object id';
 $job->finish;
 isnt $worker->dequeue->{_id}, $oid, 'different object id';
+$worker->unregister;
+
+# Delayed jobs
+$oid = $minion->enqueue(
+  add => [2, 1] => {after => bson_time((time + 100) * 1000)});
+is $worker->register->dequeue, undef, 'too early for job';
+$doc = $jobs->find_one($oid);
+$doc->{after} = bson_time((time - 100) * 1000);
+$jobs->save($doc);
+$job = $worker->dequeue;
+is $job->doc->{_id}, $oid, 'right object id';
 $job->finish;
 $worker->unregister;
 
@@ -62,7 +105,7 @@ $worker->unregister;
 $oid = $minion->enqueue(add => [5, 6]);
 $job = $worker->register->dequeue;
 is $job->doc->{_id}, $oid, 'right object id';
-$job->fail;
+$job->fail->finish;
 $doc = $jobs->find_one($oid);
 is $doc->{state}, 'failed',         'right state';
 is $doc->{error}, 'Unknown error.', 'right error';

@@ -7,7 +7,7 @@ use Minion::Job;
 use Minion::Worker;
 use Mojo::Server;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 has app  => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
 has jobs => sub { $_[0]->mango->db->collection($_[0]->prefix . '.jobs') };
@@ -28,7 +28,8 @@ sub enqueue {
   $options //= {};
 
   my $doc = {
-    args => $args // [],
+    after => $options->{after} // bson_time(1),
+    args  => $args             // [],
     created  => bson_time,
     priority => $options->{priority} // 0,
     state    => 'inactive',
@@ -38,6 +39,19 @@ sub enqueue {
 }
 
 sub new { shift->SUPER::new(mango => Mango->new(@_)) }
+
+sub stats {
+  my $self = shift;
+
+  my $jobs    = $self->jobs;
+  my $active  = @{$jobs->find({state => 'active'})->distinct('worker')};
+  my $workers = $self->workers;
+  my $all     = $workers->find->count;
+  my $stats = {active_workers => $active, inactive_workers => $all - $active};
+  $stats->{"${_}_jobs"} = $jobs->find({state => $_})->count
+    for qw(active failed finished inactive);
+  return $stats;
+}
 
 sub worker { Minion::Worker->new(minion => shift) }
 
@@ -61,14 +75,19 @@ Minion - Job queue
     say 'This is a background worker process.';
   });
 
-  # Enqueue jobs (everything gets BSON serialized)
+  # Enqueue jobs (data gets BSON serialized)
   $minion->enqueue(something_slow => ['foo', 'bar']);
   $minion->enqueue(something_slow => [1, 2, 3]);
 
-  # Create a worker and perform job right away (useful for testing)
+  # Create a worker and perform jobs right away (useful for testing)
   my $worker = $minion->worker;
   $worker->one_job;
   $worker->all_jobs;
+
+  # Build more sophisticated workers
+  my $worker = $minion->worker->repair->register;
+  if (my $job = $worker->dequeue) { $job->perform }
+  $worker->unregister;
 
 =head1 DESCRIPTION
 
@@ -159,6 +178,12 @@ These options are currently available:
 
 =over 2
 
+=item after
+
+  after => bson_time((time + 1) * 1000)
+
+Perform job only after this point in time.
+
 =item priority
 
   priority => 5
@@ -174,6 +199,12 @@ Job priority.
 
 Construct a new L<Minion> object and pass connection string to L</"mango"> if
 necessary.
+
+=head2 stats
+
+  my $stats = $minion->stats;
+
+Get statistics for jobs and workers.
 
 =head2 worker
 
