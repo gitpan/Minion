@@ -7,7 +7,7 @@ use Sys::Hostname 'hostname';
 # Global counter
 my $COUNTER = 0;
 
-has 'minion';
+has [qw(id minion)];
 has number => sub { ++$COUNTER };
 
 sub all_jobs { shift->_jobs }
@@ -16,29 +16,37 @@ sub dequeue {
   my $self = shift;
 
   # Worker not registered
-  return undef unless $self->{id};
+  return undef unless my $oid = $self->id;
 
-  my $doc = {
+  my $minion = $self->minion;
+  my $doc    = {
     query => {
       after => {'$lt' => bson_time},
       state => 'inactive',
-      task  => {'$in' => [keys %{$self->minion->tasks}]}
+      task  => {'$in' => [keys %{$minion->tasks}]}
     },
+    fields => {args     => 1, task => 1},
     sort   => {priority => -1},
-    update => {'$set'   => {state => 'active', worker => $self->{id}}},
+    update =>
+      {'$set' => {started => bson_time, state => 'active', worker => $oid}},
     new => 1
   };
-  return undef unless my $job = $self->minion->jobs->find_and_modify($doc);
-  return Minion::Job->new(doc => $job, worker => $self);
+  return undef unless my $job = $minion->jobs->find_and_modify($doc);
+  return Minion::Job->new(
+    args   => $job->{args},
+    id     => $job->{_id},
+    minion => $minion,
+    task   => $job->{task}
+  );
 }
 
 sub one_job { !!shift->_jobs(1) }
 
 sub register {
   my $self = shift;
-  $self->{id} = $self->minion->workers->insert(
+  my $oid  = $self->minion->workers->insert(
     {host => hostname, num => $self->number, pid => $$, started => bson_time});
-  return $self;
+  return $self->id($oid);
 }
 
 sub repair {
@@ -104,6 +112,13 @@ L<Minion::Worker> performs jobs for L<Minion>.
 
 L<Minion::Worker> implements the following attributes.
 
+=head2 id
+
+  my $oid = $worker->id;
+  $worker = $worker->id($oid);
+
+Worker id.
+
 =head2 minion
 
   my $minion = $worker->minion;
@@ -133,7 +148,8 @@ Perform jobs until queue is empty and return the number of jobs performed.
 
   my $job = $worker->dequeue;
 
-Dequeue L<Minion::Job> object or return C<undef> if queue was empty.
+Dequeue L<Minion::Job> object and transition from C<inactive> to C<active>
+state or return C<undef> if queue was empty.
 
 =head2 one_job
 

@@ -7,7 +7,7 @@ use Minion::Job;
 use Minion::Worker;
 use Mojo::Server;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 has app  => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
 has jobs => sub { $_[0]->mango->db->collection($_[0]->prefix . '.jobs') };
@@ -36,6 +36,19 @@ sub enqueue {
     task     => $task
   };
   return $self->jobs->insert($doc);
+}
+
+sub job {
+  my ($self, $oid) = @_;
+
+  return undef
+    unless my $job = $self->jobs->find_one($oid, {args => 1, task => 1});
+  return Minion::Job->new(
+    args   => $job->{args},
+    id     => $job->{_id},
+    minion => $self,
+    task   => $job->{task}
+  );
 }
 
 sub new { shift->SUPER::new(mango => Mango->new(@_)) }
@@ -172,7 +185,7 @@ Register a new task.
   my $oid = $minion->enqueue(foo => [@args]);
   my $oid = $minion->enqueue(foo => [@args] => {priority => 1});
 
-Enqueue a new job.
+Enqueue a new job with C<inactive> state.
 
 These options are currently available:
 
@@ -191,6 +204,13 @@ Perform job only after this point in time.
 Job priority.
 
 =back
+
+=head2 job
+
+  my $job = $minion->job($oid);
+
+Get L<Minion::Job> object without making any changes to the actual job or
+return C<undef> if job does not exist.
 
 =head2 new
 

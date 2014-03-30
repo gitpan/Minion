@@ -1,9 +1,12 @@
 package Minion::Job;
 use Mojo::Base -base;
 
-has [qw(doc worker)];
+use Mango::BSON 'bson_time';
 
-sub app { shift->worker->minion->app }
+has args => sub { [] };
+has [qw(id minion task)];
+
+sub app { shift->minion->app }
 
 sub fail { shift->_update(shift // 'Unknown error.') }
 
@@ -15,6 +18,13 @@ sub perform {
   $self->fail('Non-zero exit status.') if $?;
 }
 
+sub state {
+  my $self = shift;
+  return undef
+    unless my $job = $self->minion->jobs->find_one($self->id, {state => 1});
+  return $job->{state};
+}
+
 sub _child {
   my $self = shift;
 
@@ -23,20 +33,27 @@ sub _child {
   return $pid if $pid;
 
   # Child
-  my $doc    = $self->doc;
-  my $minion = $self->worker->minion;
-  $minion->app->log->debug(
-    qq{Performing job "$doc->{task}" ($doc->{_id}:$$).});
-  my $cb = $minion->tasks->{$doc->{task}};
-  eval { $self->$cb(@{$doc->{args}}); 1 } ? $self->finish : $self->fail($@);
+  my $task   = $self->task;
+  my $minion = $self->minion;
+  $minion->app->log->debug(qq{Performing job "$task" (@{[$self->id]}:$$).});
+  my $cb = $minion->tasks->{$task};
+  eval { $self->$cb(@{$self->args}); 1 } ? $self->finish : $self->fail($@);
   exit 0;
 }
 
 sub _update {
   my ($self, $err) = @_;
-  my $doc = $self->doc;
-  $self->worker->minion->jobs->update({_id => $doc->{_id}, state => 'active'},
-    {%$doc, state => $err ? ('failed', error => $err) : 'finished'});
+
+  $self->minion->jobs->update(
+    {_id => $self->id, state => 'active'},
+    {
+      '$set' => {
+        finished => bson_time,
+        state => $err ? ('failed', error => $err) : 'finished'
+      }
+    }
+  );
+
   return $self;
 }
 
@@ -52,7 +69,7 @@ Minion::Job - Minion job
 
   use Minion::Job;
 
-  my $job = Minion::Job->new(doc => $doc, worker => $worker);
+  my $job = Minion::Job->new(id => $oid, minion => $minion, task => 'foo');
 
 =head1 DESCRIPTION
 
@@ -62,19 +79,33 @@ L<Minion::Job> is a container for L<Minion> jobs.
 
 L<Minion::Job> implements the following attributes.
 
-=head2 doc
+=head2 args
 
-  my $doc = $job->doc;
-  $job    = $job->doc({});
+  my $args = $job->args;
+  $job     = $job->args([]);
 
-BSON document for job.
+Arguments passed to task.
 
-=head2 worker
+=head2 id
 
-  my $worker = $job->worker;
-  $job       = $job->worker(Minion::Worker->new);
+  my $oid = $job->id;
+  $job    = $job->id($oid);
 
-L<Minion::Worker> object this job belongs to.
+Job id.
+
+=head2 minion
+
+  my $minion = $job->minion;
+  $job       = $job->minion(Minion->new);
+
+L<Minion> object this job belongs to.
+
+=head2 task
+
+  my $task = $job->task;
+  $job     = $job->task('foo');
+
+Task name.
 
 =head1 METHODS
 
@@ -88,26 +119,33 @@ following new ones.
 Get application from L<Minion/"app">.
 
   # Longer version
-  my $app = $job->worker->minion->app;
+  my $app = $job->minion->app;
 
 =head2 fail
 
   $job = $job->fail;
   $job = $job->fail('Something went wrong!');
 
-Update job to C<failed> state.
+Transition from C<active> to C<failed> state.
 
 =head2 finish
 
   $job = $job->finish;
 
-Update job to C<finished> state.
+Transition from C<active> to C<finished> state.
 
 =head2 perform
 
   $job->perform;
 
 Perform job in new process and wait for it to finish.
+
+=head2 state
+
+  my $state = $job->state;
+
+Get current state of job, usually C<active>, C<failed>, C<finished> or
+C<inactive>.
 
 =head1 SEE ALSO
 

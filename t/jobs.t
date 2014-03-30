@@ -5,7 +5,7 @@ use Test::More;
 plan skip_all => 'set TEST_ONLINE to enable this test'
   unless $ENV{TEST_ONLINE};
 
-use Mango::BSON 'bson_time';
+use Mango::BSON qw(bson_oid bson_time);
 use Minion;
 
 # Clean up before start
@@ -21,9 +21,9 @@ my $add = $jobs->insert({results => []});
 $minion->add_task(
   add => sub {
     my ($job, $first, $second) = @_;
-    my $doc = $job->worker->minion->jobs->find_one($add);
+    my $doc = $job->minion->jobs->find_one($add);
     push @{$doc->{results}}, $first + $second;
-    $job->worker->minion->jobs->save($doc);
+    $job->minion->jobs->save($doc);
   }
 );
 $minion->add_task(exit => sub { exit 1 });
@@ -61,30 +61,39 @@ is $stats->{finished_jobs},    1, 'one finished job';
 is $stats->{inactive_jobs},    0, 'no inactive jobs';
 
 # Enqueue, dequeue and perform
+is $minion->job(bson_oid), undef, 'job does not exist';
 my $oid = $minion->enqueue(add => [2, 2]);
 my $doc = $jobs->find_one({task => 'add'});
 is $doc->{_id}, $oid, 'right object id';
 is_deeply $doc->{args}, [2, 2], 'right arguments';
-ok $doc->{created}->to_epoch, 'has timestamp';
+ok $doc->{created}->to_epoch, 'has created timestamp';
 is $doc->{priority}, 0,          'right priority';
 is $doc->{state},    'inactive', 'right state';
 $worker = $minion->worker;
 is $worker->dequeue, undef, 'not registered';
 $job = $worker->register->dequeue;
-is_deeply $job->doc->{args}, [2, 2], 'right arguments';
-is $job->doc->{state}, 'active', 'right state';
-is $job->doc->{task},  'add',    'right task';
-is $workers->find_one($job->doc->{worker})->{pid}, $$, 'right worker';
+ok $jobs->find_one($job->id)->{started}->to_epoch, 'has started timestamp';
+is_deeply $job->args, [2, 2], 'right arguments';
+is $job->state, 'active', 'right state';
+is $job->task,  'add',    'right task';
+is $workers->find_one($jobs->find_one($job->id)->{worker})->{pid}, $$,
+  'right worker';
 $job->perform;
 is_deeply $jobs->find_one($add)->{results}, [4], 'right result';
-is $jobs->find_one($oid)->{state}, 'finished', 'right state';
+$doc = $jobs->find_one($job->id);
+is $doc->{state}, 'finished', 'right state';
+ok $doc->{finished}->to_epoch, 'has finished timestamp';
 $worker->unregister;
+$job = $minion->job($job->id);
+is_deeply $job->args, [2, 2], 'right arguments';
+is $job->state, 'finished', 'right state';
+is $job->task,  'add',      'right task';
 
 # Jobs with priority
 $minion->enqueue(add => [1, 2]);
 $oid = $minion->enqueue(add => [2, 4], {priority => 1});
 $job = $worker->register->dequeue;
-is $job->doc->{_id}, $oid, 'right object id';
+is $job->id, $oid, 'right object id';
 $job->finish;
 isnt $worker->dequeue->{_id}, $oid, 'different object id';
 $worker->unregister;
@@ -97,28 +106,28 @@ $doc = $jobs->find_one($oid);
 $doc->{after} = bson_time((time - 100) * 1000);
 $jobs->save($doc);
 $job = $worker->dequeue;
-is $job->doc->{_id}, $oid, 'right object id';
+is $job->id, $oid, 'right object id';
 $job->finish;
 $worker->unregister;
 
 # Failed jobs
 $oid = $minion->enqueue(add => [5, 6]);
 $job = $worker->register->dequeue;
-is $job->doc->{_id}, $oid, 'right object id';
+is $job->id, $oid, 'right object id';
 $job->fail->finish;
 $doc = $jobs->find_one($oid);
 is $doc->{state}, 'failed',         'right state';
 is $doc->{error}, 'Unknown error.', 'right error';
 $oid = $minion->enqueue(add => [6, 7]);
 $job = $worker->dequeue;
-is $job->doc->{_id}, $oid, 'right object id';
+is $job->id, $oid, 'right object id';
 $job->fail('Something bad happened!');
 $doc = $jobs->find_one($oid);
 is $doc->{state}, 'failed', 'right state';
 is $doc->{error}, 'Something bad happened!', 'right error';
 $oid = $minion->enqueue('fail');
 $job = $worker->dequeue;
-is $job->doc->{_id}, $oid, 'right object id';
+is $job->id, $oid, 'right object id';
 $job->perform;
 $doc = $jobs->find_one($oid);
 is $doc->{state}, 'failed', 'right state';
@@ -128,7 +137,7 @@ $worker->unregister;
 # Exit
 $oid = $minion->enqueue('exit');
 $job = $worker->register->dequeue;
-is $job->doc->{_id}, $oid, 'right object id';
+is $job->id, $oid, 'right object id';
 $job->perform;
 $doc = $jobs->find_one($oid);
 is $doc->{state}, 'failed', 'right state';
