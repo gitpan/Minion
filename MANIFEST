@@ -2,6 +2,7 @@ Changes
 CONTRIBUTING.md
 lib/Minion.pm
 lib/Minion/Command/minion.pm
+lib/Minion/Command/minion/job.pm
 lib/Minion/Command/minion/worker.pm
 lib/Minion/Job.pm
 lib/Minion/Worker.pm

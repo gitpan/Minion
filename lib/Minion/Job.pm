@@ -8,9 +8,15 @@ has [qw(id minion task)];
 
 sub app { shift->minion->app }
 
+sub created { shift->_time('created') }
+
+sub error { shift->_get('error') }
+
 sub fail { shift->_update(shift // 'Unknown error.') }
 
 sub finish { shift->_update }
+
+sub finished { shift->_time('finished') }
 
 sub perform {
   my $self = shift;
@@ -18,12 +24,33 @@ sub perform {
   $self->fail('Non-zero exit status.') if $?;
 }
 
-sub state {
-  my $self = shift;
-  return undef
-    unless my $job = $self->minion->jobs->find_one($self->id, {state => 1});
-  return $job->{state};
+sub remove {
+  my $self   = shift;
+  my $states = [qw(failed finished inactive)];
+  return !!$self->minion->jobs->remove(
+    {_id => $self->id, state => {'$in' => $states}})->{n};
 }
+
+sub restart {
+  my $self = shift;
+
+  $self->minion->jobs->update(
+    {_id => $self->id, state => {'$in' => [qw(failed finished)]}},
+    {
+      '$inc' => {restarts => 1},
+      '$set' => {state    => 'inactive'},
+      '$unset' => {error => '', finished => '', started => '', worker => ''}
+    }
+  );
+
+  return $self;
+}
+
+sub restarts { shift->_get('restarts') // 0 }
+
+sub started { shift->_time('started') }
+
+sub state { shift->_get('state') }
 
 sub _child {
   my $self = shift;
@@ -41,18 +68,27 @@ sub _child {
   exit 0;
 }
 
+sub _get {
+  my ($self, $key) = @_;
+  return undef
+    unless my $job = $self->minion->jobs->find_one($self->id, {$key => 1});
+  return $job->{$key};
+}
+
+sub _time {
+  my $self = shift;
+  return undef unless my $time = $self->_get(@_);
+  return $time->to_epoch;
+}
+
 sub _update {
   my ($self, $err) = @_;
 
-  $self->minion->jobs->update(
-    {_id => $self->id, state => 'active'},
-    {
-      '$set' => {
-        finished => bson_time,
-        state => $err ? ('failed', error => $err) : 'finished'
-      }
-    }
-  );
+  my $doc
+    = {finished => bson_time, state => defined $err ? 'failed' : 'finished'};
+  $doc->{error} = $err if defined $err;
+  $self->minion->jobs->update({_id => $self->id, state => 'active'},
+    {'$set' => $doc});
 
   return $self;
 }
@@ -121,6 +157,18 @@ Get application from L<Minion/"app">.
   # Longer version
   my $app = $job->minion->app;
 
+=head2 created
+
+  my $epoch = $job->created;
+
+Time this job was created in floating seconds since the epoch.
+
+=head2 error
+
+  my $err = $job->error;
+
+Get error for C<failed> job.
+
 =head2 fail
 
   $job = $job->fail;
@@ -134,11 +182,43 @@ Transition from C<active> to C<failed> state.
 
 Transition from C<active> to C<finished> state.
 
+=head2 finished
+
+  my $epoch = $job->finished;
+
+Time this job transitioned from C<active> to C<failed> or C<finished> in
+floating seconds since the epoch.
+
 =head2 perform
 
   $job->perform;
 
 Perform job in new process and wait for it to finish.
+
+=head2 remove
+
+  my $bool = $job->remove;
+
+Remove C<failed>, C<finished> or C<inactive> job from queue.
+
+=head2 restart
+
+  $job = $job->restart;
+
+Transition from C<failed> or C<finished> state back to C<inactive>.
+
+=head2 restarts
+
+  my $num = $job->restarts;
+
+Get number of times this job has been restarted.
+
+=head2 started
+
+  my $epoch = $job->started;
+
+Time this job transitioned from C<inactive> to C<active> in floating seconds
+since the epoch.
 
 =head2 state
 

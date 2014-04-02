@@ -37,22 +37,13 @@ get '/count' => sub {
 
 my $t = Test::Mojo->new;
 
-# Perform one job
+# Perform jobs automatically
+$t->app->minion->auto_perform(1);
 $t->get_ok('/increment')->status_is(200)->content_is('Incrementing soon!');
-$t->get_ok('/increment')->status_is(200)->content_is('Incrementing soon!');
-my $worker = $t->app->minion->worker;
-$t->get_ok('/count')->status_is(200)->content_is('0');
-ok $worker->one_job, 'job performed';
 $t->get_ok('/count')->status_is(200)->content_is('1');
-ok $worker->one_job, 'job performed';
-ok !$worker->one_job, 'no job performed';
-$t->get_ok('/count')->status_is(200)->content_is('2');
-
-# Perform all jobs
 $t->get_ok('/increment')->status_is(200)->content_is('Incrementing soon!');
 $t->get_ok('/increment')->status_is(200)->content_is('Incrementing soon!');
-is $worker->all_jobs, 2, 'two jobs performed';
-is $worker->all_jobs, 0, 'no jobs performed';
-$t->get_ok('/count')->status_is(200)->content_is('4');
+$t->get_ok('/count')->status_is(200)->content_is('3');
+$_->drop for app->minion->workers, app->minion->jobs;
 
 done_testing();

@@ -6,12 +6,13 @@ use Mango::BSON 'bson_time';
 use Minion::Job;
 use Minion::Worker;
 use Mojo::Server;
+use Sys::Hostname 'hostname';
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
-has app  => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
+has app => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
+has [qw(auto_perform mango)];
 has jobs => sub { $_[0]->mango->db->collection($_[0]->prefix . '.jobs') };
-has 'mango';
 has prefix => 'minion';
 has tasks => sub { {} };
 has workers =>
@@ -35,7 +36,9 @@ sub enqueue {
     state    => 'inactive',
     task     => $task
   };
-  return $self->jobs->insert($doc);
+  my $oid = $self->jobs->insert($doc);
+  $self->_perform if $self->auto_perform;
+  return $oid;
 }
 
 sub job {
@@ -53,6 +56,27 @@ sub job {
 
 sub new { shift->SUPER::new(mango => Mango->new(@_)) }
 
+sub repair {
+  my $self = shift;
+
+  # Check workers on this host (all should be owned by the same user)
+  my $workers = $self->workers;
+  my $cursor = $workers->find({host => hostname});
+  while (my $worker = $cursor->next) {
+    $workers->remove({_id => $worker->{_id}}) unless kill 0, $worker->{pid};
+  }
+
+  # Abandoned jobs
+  my $jobs = $self->jobs;
+  $cursor = $jobs->find({state => 'active'});
+  while (my $job = $cursor->next) {
+    $jobs->save({%$job, state => 'failed', error => 'Worker went away.'})
+      unless $workers->find_one($job->{worker});
+  }
+
+  return $self;
+}
+
 sub stats {
   my $self = shift;
 
@@ -67,6 +91,18 @@ sub stats {
 }
 
 sub worker { Minion::Worker->new(minion => shift) }
+
+sub _perform {
+  my $self = shift;
+
+  # No recursion
+  return if $self->{lock};
+  local $self->{lock} = 1;
+
+  my $worker = $self->worker->register;
+  while (my $job = $worker->dequeue) { $job->perform }
+  $worker->unregister;
+}
 
 1;
 
@@ -92,13 +128,12 @@ Minion - Job queue
   $minion->enqueue(something_slow => ['foo', 'bar']);
   $minion->enqueue(something_slow => [1, 2, 3]);
 
-  # Create a worker and perform jobs right away (useful for testing)
-  my $worker = $minion->worker;
-  $worker->one_job;
-  $worker->all_jobs;
+  # Perform jobs automatically for testing
+  $minion->auto_perform(1);
+  $minion->enqueue(something_slow => ['foo', 'bar']);
 
   # Build more sophisticated workers
-  my $worker = $minion->worker->repair->register;
+  my $worker = $minion->repair->worker->register;
   if (my $job = $worker->dequeue) { $job->perform }
   $worker->unregister;
 
@@ -130,6 +165,14 @@ L<Minion> implements the following attributes.
   $minion = $minion->app(MyApp->new);
 
 Application for job queue, defaults to a L<Mojo::HelloWorld> object.
+
+=head2 auto_perform
+
+  my $bool = $minion->auto_perform;
+  $minion  = $minion->auto_perform($bool);
+
+Perform jobs automatically when a new one has been enqueued with
+L</"enqueue">, very useful for testing.
 
 =head2 jobs
 
@@ -219,6 +262,12 @@ return C<undef> if job does not exist.
 
 Construct a new L<Minion> object and pass connection string to L</"mango"> if
 necessary.
+
+=head2 repair
+
+  $minion = $minion->repair;
+
+Repair worker registry and job queue.
 
 =head2 stats
 

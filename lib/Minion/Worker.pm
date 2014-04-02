@@ -10,8 +10,6 @@ my $COUNTER = 0;
 has [qw(id minion)];
 has number => sub { ++$COUNTER };
 
-sub all_jobs { shift->_jobs }
-
 sub dequeue {
   my $self = shift;
 
@@ -40,8 +38,6 @@ sub dequeue {
   );
 }
 
-sub one_job { !!shift->_jobs(1) }
-
 sub register {
   my $self = shift;
   my $oid  = $self->minion->workers->insert(
@@ -49,45 +45,16 @@ sub register {
   return $self->id($oid);
 }
 
-sub repair {
+sub started {
   my $self = shift;
-
-  # Check workers on this host (all should be owned by the same user)
-  my $workers = $self->minion->workers;
-  my $cursor = $workers->find({host => hostname});
-  while (my $worker = $cursor->next) {
-    $workers->remove({_id => $worker->{_id}}) unless kill 0, $worker->{pid};
-  }
-
-  # Abandoned jobs
-  my $jobs = $self->minion->jobs;
-  $cursor = $jobs->find({state => 'active'});
-  while (my $job = $cursor->next) {
-    $jobs->save({%$job, state => 'failed', error => 'Worker went away.'})
-      unless $workers->find_one($job->{worker});
-  }
-
-  return $self;
+  return undef unless my $worker = $self->minion->workers->find_one($self->id);
+  return $worker->{started}->to_epoch;
 }
 
 sub unregister {
   my ($self, $id) = @_;
   $self->minion->workers->remove({_id => delete $_[0]->{id}});
   return $self;
-}
-
-sub _jobs {
-  my ($self, $one) = @_;
-
-  $self->register;
-  my $i = 0;
-  while (my $job = $self->dequeue) {
-    ++$i and $job->perform;
-    last if $one;
-  }
-  $self->unregister;
-
-  return $i;
 }
 
 1;
@@ -138,12 +105,6 @@ Number of this worker, unique per process.
 L<Minion::Worker> inherits all methods from L<Mojo::Base> and implements the
 following new ones.
 
-=head2 all_jobs
-
-  my $num = $worker->all_jobs;
-
-Perform jobs until queue is empty and return the number of jobs performed.
-
 =head2 dequeue
 
   my $job = $worker->dequeue;
@@ -151,23 +112,17 @@ Perform jobs until queue is empty and return the number of jobs performed.
 Dequeue L<Minion::Job> object and transition from C<inactive> to C<active>
 state or return C<undef> if queue was empty.
 
-=head2 one_job
-
-  my $bool = $worker->one_job;
-
-Perform one job and return a false value if queue was empty.
-
 =head2 register
 
   $worker = $worker->register;
 
 Register worker.
 
-=head2 repair
+=head2 started
 
-  $worker = $worker->repair;
+  my $epoch = $worker->started;
 
-Repair worker registry and job queue.
+Time this worker was started in floating seconds since the epoch.
 
 =head2 unregister
 
