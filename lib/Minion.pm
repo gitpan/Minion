@@ -6,9 +6,10 @@ use Mango::BSON 'bson_time';
 use Minion::Job;
 use Minion::Worker;
 use Mojo::Server;
+use Scalar::Util 'weaken';
 use Sys::Hostname 'hostname';
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 has app => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
 has [qw(auto_perform mango)];
@@ -25,20 +26,30 @@ sub add_task {
 }
 
 sub enqueue {
-  my ($self, $task, $args, $options) = @_;
-  $options //= {};
+  my ($self, $task) = (shift, shift);
+  my $cb = ref $_[-1] eq 'CODE' ? pop : undef;
+  my $args    = shift // [];
+  my $options = shift // {};
 
   my $doc = {
-    args => $args // [],
+    args     => $args,
     created  => bson_time,
     delayed  => $options->{delayed} // bson_time(1),
     priority => $options->{priority} // 0,
     state    => 'inactive',
     task     => $task
   };
-  my $oid = $self->jobs->insert($doc);
-  $self->_perform if $self->auto_perform;
-  return $oid;
+
+  # Blocking
+  unless ($cb) {
+    my $oid = $self->jobs->insert($doc);
+    $self->_perform;
+    return $oid;
+  }
+
+  # Non-blocking
+  weaken $self;
+  return $self->jobs->insert($doc => sub { shift; $self->_perform->$cb(@_) });
 }
 
 sub job {
@@ -96,12 +107,13 @@ sub _perform {
   my $self = shift;
 
   # No recursion
-  return if $self->{lock};
+  return $self if !$self->auto_perform || $self->{lock};
   local $self->{lock} = 1;
 
   my $worker = $self->worker->register;
   while (my $job = $worker->dequeue) { $job->perform }
   $worker->unregister;
+  return $self;
 }
 
 1;
@@ -148,10 +160,15 @@ an application loads the plugin L<Mojolicious::Plugin::Minion>.
 
   $ ./myapp.pl minion worker
 
+Jobs can be managed right from the command line with
+L<Minion::Command::minion::job>.
+
+  $ ./myapp.pl minion job
+
 Note that this whole distribution is EXPERIMENTAL and will change without
 warning!
 
-Many features are still incomplete or missing, so you should wait for a stable
+Most of the API is not changing much anymore, but you should wait for a stable
 1.0 release before using any of the modules in this distribution in a
 production environment.
 
@@ -228,7 +245,14 @@ Register a new task.
   my $oid = $minion->enqueue(foo => [@args]);
   my $oid = $minion->enqueue(foo => [@args] => {priority => 1});
 
-Enqueue a new job with C<inactive> state.
+Enqueue a new job with C<inactive> state. You can also append a callback to
+perform operation non-blocking.
+
+  $minion->enqueue(foo => sub {
+    my ($minion, $err, $oid) = @_;
+    ...
+  });
+  Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
 
 These options are currently available:
 
@@ -294,6 +318,7 @@ the terms of the Artistic License version 2.0.
 
 =head1 SEE ALSO
 
-L<Mojolicious::Guides>, L<http://mojolicio.us>.
+L<https://github.com/kraih/minion>, L<Mojolicious::Guides>,
+L<http://mojolicio.us>.
 
 =cut
