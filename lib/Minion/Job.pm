@@ -1,5 +1,5 @@
 package Minion::Job;
-use Mojo::Base -base;
+use Mojo::Base 'Mojo::EventEmitter';
 
 use Mango::BSON 'bson_time';
 
@@ -38,17 +38,17 @@ sub remove {
 sub restart {
   my $self = shift;
 
-  $self->minion->jobs->update(
+  return !!$self->minion->jobs->update(
     {_id => $self->id, state => {'$in' => [qw(failed finished)]}},
     {
-      '$inc' => {restarts => 1},
-      '$set' => {state    => 'inactive'},
+      '$inc' => {restarts  => 1},
+      '$set' => {restarted => bson_time, state => 'inactive'},
       '$unset' => {error => '', finished => '', started => '', worker => ''}
     }
-  );
-
-  return $self;
+  )->{n};
 }
+
+sub restarted { shift->_time('restarted') }
 
 sub restarts { shift->_get('restarts') // 0 }
 
@@ -90,10 +90,10 @@ sub _update {
   my $doc
     = {finished => bson_time, state => defined $err ? 'failed' : 'finished'};
   $doc->{error} = $err if defined $err;
-  $self->minion->jobs->update({_id => $self->id, state => 'active'},
-    {'$set' => $doc});
-
-  return $self;
+  my $n = $self->minion->jobs->update({_id => $self->id, state => 'active'},
+    {'$set' => $doc})->{n};
+  $err ? $self->emit(failed => $err) : $self->emit('finished') if $n;
+  return !!$n;
 }
 
 1;
@@ -113,6 +113,40 @@ Minion::Job - Minion job
 =head1 DESCRIPTION
 
 L<Minion::Job> is a container for L<Minion> jobs.
+
+=head1 EVENTS
+
+L<Minion::Job> inherits all events from L<Mojo::EventEmitter> and can emit the
+following new ones.
+
+=head2 failed
+
+  $job->on(failed => sub {
+    my ($job, $err) = @_;
+    ...
+  });
+
+Emitted after this job transitioned to the C<failed> state.
+
+  $job->on(failed => sub {
+    my ($job, $err) = @_;
+    say "Something went wrong: $err";
+  });
+
+=head2 finished
+
+  $job->on(finished => sub {
+    my $job = shift;
+    ...
+  });
+
+Emitted after this job transitioned to the C<finished> state.
+
+  $job->on(finished => sub {
+    my $job = shift;
+    my $oid = $job->id;
+    say "Job $oid is finished.";
+  });
 
 =head1 ATTRIBUTES
 
@@ -148,8 +182,8 @@ Task name.
 
 =head1 METHODS
 
-L<Minion::Job> inherits all methods from L<Mojo::Base> and implements the
-following new ones.
+L<Minion::Job> inherits all methods from L<Mojo::EventEmitter> and implements
+the following new ones.
 
 =head2 app
 
@@ -180,14 +214,14 @@ Get error for C<failed> job.
 
 =head2 fail
 
-  $job = $job->fail;
-  $job = $job->fail('Something went wrong!');
+  my $bool = $job->fail;
+  my $bool = $job->fail('Something went wrong!');
 
 Transition from C<active> to C<failed> state.
 
 =head2 finish
 
-  $job = $job->finish;
+  my $bool = $job->finish;
 
 Transition from C<active> to C<finished> state.
 
@@ -218,9 +252,16 @@ Remove C<failed>, C<finished> or C<inactive> job from queue.
 
 =head2 restart
 
-  $job = $job->restart;
+  my $bool = $job->restart;
 
 Transition from C<failed> or C<finished> state back to C<inactive>.
+
+=head2 restarted
+
+  my $epoch = $job->restarted;
+
+Time this job last transitioned from C<failed> or C<finished> back to
+C<inactive> in floating seconds since the epoch.
 
 =head2 restarts
 
