@@ -8,23 +8,74 @@ plan skip_all => 'set TEST_ONLINE to enable this test'
 use Mango::BSON qw(bson_oid bson_time);
 use Minion;
 use Mojo::IOLoop;
+use Sys::Hostname 'hostname';
 
 # Clean up before start
-my $minion = Minion->new($ENV{TEST_ONLINE});
-is $minion->prefix, 'minion', 'right prefix';
-my $workers = $minion->workers;
-my $jobs    = $minion->prefix('jobs_test')->jobs;
+my $minion = Minion->new(Mango => $ENV{TEST_ONLINE});
+is $minion->backend->prefix, 'minion', 'right prefix';
+my $workers = $minion->backend->workers;
+my $jobs    = $minion->backend->prefix('jobs_test')->jobs;
 is $jobs->name, 'jobs_test.jobs', 'right name';
-$_->options && $_->drop for $workers, $jobs;
+$minion->reset;
+
+# Nothing to repair
+my $worker = $minion->repair->worker;
+isa_ok $worker->minion->app, 'Mojolicious', 'has default application';
+
+# Register and unregister
+$worker->register;
+like $worker->info->{started}, qr/^[\d.]+$/, 'has timestamp';
+ok !$worker->unregister->minion->backend->workers->find_one({pid => $$}),
+  'not registered';
+ok $worker->register->minion->backend->workers->find_one(
+  {host => hostname, pid => $$}), 'is registered';
+ok !$worker->unregister->minion->backend->workers->find_one(
+  {host => hostname, pid => $$}), 'not registered';
+
+# Repair dead worker
+$minion->add_task(test => sub { });
+my $worker2 = $minion->worker->register;
+isnt $worker2->id, $worker->id, 'new id';
+my $oid = $minion->enqueue('test');
+my $job = $worker2->dequeue;
+is $job->id, $oid, 'right object id';
+is $worker2->info->{jobs}[0], $job->id, 'right object id';
+my $id = $worker2->id;
+undef $worker2;
+is $job->info->{state}, 'active', 'job is still active';
+my $doc = $workers->find_one($id);
+ok $doc, 'is registered';
+my $pid = 4000;
+$pid++ while kill 0, $pid;
+$workers->save({%$doc, pid => $pid});
+$minion->repair;
+ok !$workers->find_one($id), 'not registered';
+is $job->info->{state}, 'failed',            'job is no longer active';
+is $job->info->{error}, 'Worker went away.', 'right error';
+
+# Repair abandoned job
+$worker->register;
+$oid = $minion->enqueue('test');
+$job = $worker->dequeue;
+is $job->id, $oid, 'right object id';
+$worker->unregister;
+$minion->repair;
+is $job->info->{state}, 'failed',            'job is no longer active';
+is $job->info->{error}, 'Worker went away.', 'right error';
+
+# Reset
+$minion->reset->repair;
+ok !$minion->backend->jobs->options,    'no jobs';
+ok !$minion->backend->workers->options, 'no workers';
 
 # Tasks
 my $add = $jobs->insert({results => []});
 $minion->add_task(
   add => sub {
     my ($job, $first, $second) = @_;
-    my $doc = $job->minion->jobs->find_one($add);
+    my $doc = $job->minion->backend->jobs->find_one($add);
     push @{$doc->{results}}, $first + $second;
-    $job->minion->jobs->save($doc);
+    $job->minion->backend->jobs->save($doc);
   }
 );
 $minion->add_task(exit => sub { exit 1 });
@@ -38,12 +89,12 @@ is $stats->{active_jobs},      0, 'no active jobs';
 is $stats->{failed_jobs},      0, 'no failed jobs';
 is $stats->{finished_jobs},    0, 'no finished jobs';
 is $stats->{inactive_jobs},    0, 'no inactive jobs';
-my $worker = $minion->worker->register;
+$worker = $minion->worker->register;
 is $minion->stats->{inactive_workers}, 1, 'one inactive worker';
 $minion->enqueue('fail');
 $minion->enqueue('fail');
 is $minion->stats->{inactive_jobs}, 2, 'two inactive jobs';
-my $job = $worker->dequeue;
+$job   = $worker->dequeue;
 $stats = $minion->stats;
 is $stats->{active_workers}, 1, 'one active worker';
 is $stats->{active_jobs},    1, 'one active job';
@@ -65,73 +116,89 @@ is $stats->{failed_jobs},      0, 'one failed job';
 is $stats->{finished_jobs},    2, 'one finished job';
 is $stats->{inactive_jobs},    0, 'no inactive jobs';
 
+# List jobs
+my $batch = $minion->backend->list_jobs(0, 10);
+is $batch->[0]{task},     'fail',     'right task';
+is $batch->[0]{state},    'finished', 'right state';
+is $batch->[0]{restarts}, 1,          'job has been restarted';
+is $batch->[1]{task},     'fail',     'right task';
+is $batch->[1]{state},    'finished', 'right state';
+is $batch->[1]{restarts}, 0,          'job has not been restarted';
+ok !$batch->[2], 'no more results';
+$batch = $minion->backend->list_jobs(0, 1);
+is $batch->[0]{restarts}, 1, 'job has been restarted';
+ok !$batch->[1], 'no more results';
+$batch = $minion->backend->list_jobs(1, 1);
+is $batch->[0]{restarts}, 0, 'job has not been restarted';
+ok !$batch->[1], 'no more results';
+
 # Enqueue, dequeue and perform
 is $minion->job(bson_oid), undef, 'job does not exist';
-my $oid = $minion->enqueue(add => [2, 2]);
-my $doc = $jobs->find_one({task => 'add'});
+$oid = $minion->enqueue(add => [2, 2]);
+$doc = $jobs->find_one({task => 'add'});
 is $doc->{_id}, $oid, 'right object id';
 is_deeply $doc->{args}, [2, 2], 'right arguments';
 is $doc->{priority}, 0,          'right priority';
 is $doc->{state},    'inactive', 'right state';
 $worker = $minion->worker;
 is $worker->dequeue, undef, 'not registered';
-ok !$minion->job($oid)->started, 'no started timestamp';
+ok !$minion->job($oid)->info->{started}, 'no started timestamp';
 $job = $worker->register->dequeue;
-like $job->created, qr/^[\d.]+$/, 'has created timestamp';
-like $job->started, qr/^[\d.]+$/, 'has started timestamp';
+like $job->info->{created}, qr/^[\d.]+$/, 'has created timestamp';
+like $job->info->{started}, qr/^[\d.]+$/, 'has started timestamp';
 is_deeply $job->args, [2, 2], 'right arguments';
-is $job->state, 'active', 'right state';
-is $job->task,  'add',    'right task';
+is $job->info->{state}, 'active', 'right state';
+is $job->task, 'add', 'right task';
 is $workers->find_one($jobs->find_one($job->id)->{worker})->{pid}, $$,
   'right worker';
-ok !$job->finished, 'no finished timestamp';
+ok !$job->info->{finished}, 'no finished timestamp';
 $job->perform;
-like $job->finished, qr/^[\d.]+$/, 'has finished timestamp';
+like $job->info->{finished}, qr/^[\d.]+$/, 'has finished timestamp';
 is_deeply $jobs->find_one($add)->{results}, [4], 'right result';
 $doc = $jobs->find_one($job->id);
 is $doc->{state}, 'finished', 'right state';
 $worker->unregister;
 $job = $minion->job($job->id);
 is_deeply $job->args, [2, 2], 'right arguments';
-is $job->state, 'finished', 'right state';
-is $job->task,  'add',      'right task';
+is $job->info->{state}, 'finished', 'right state';
+is $job->task, 'add', 'right task';
 
 # Restart and remove
 $oid = $minion->enqueue(add => [5, 6]);
 $job = $worker->register->dequeue;
-is $job->restarts, 0, 'job has not been restarted';
+is $job->info->{restarts}, 0, 'job has not been restarted';
 is $job->id, $oid, 'right object id';
 ok $job->finish, 'job finished';
 ok !$worker->dequeue, 'no more jobs';
 $job = $minion->job($oid);
-ok !$job->restarted, 'no restarted timestamp';
-ok $job->restart,     'job restarted';
-like $job->restarted, qr/^[\d.]+$/, 'has restarted timestamp';
-is $job->state,       'inactive', 'right state';
-is $job->restarts,    1, 'job has been restarted once';
+ok !$job->info->{restarted}, 'no restarted timestamp';
+ok $job->restart, 'job restarted';
+like $job->info->{restarted}, qr/^[\d.]+$/, 'has restarted timestamp';
+is $job->info->{state},       'inactive',   'right state';
+is $job->info->{restarts},    1,            'job has been restarted once';
 $job = $worker->dequeue;
 ok !$job->restart, 'job not restarted';
 is $job->id, $oid, 'right object id';
 ok !$job->remove, 'job has not been removed';
-ok $job->fail,     'job failed';
-ok $job->restart,  'job restarted';
-is $job->restarts, 2, 'job has been restarted twice';
-ok !$job->finished, 'no finished timestamp';
-ok !$job->started,  'no started timestamp';
+ok $job->fail,    'job failed';
+ok $job->restart, 'job restarted';
+is $job->info->{restarts}, 2, 'job has been restarted twice';
+ok !$job->info->{finished}, 'no finished timestamp';
+ok !$job->info->{started},  'no started timestamp';
 $doc = $jobs->find_one($oid);
 ok !$doc->{error},  'no error';
 ok !$doc->{worker}, 'no worker';
 $job = $worker->dequeue;
-is $job->state, 'active', 'right state';
+is $job->info->{state}, 'active', 'right state';
 ok $job->finish, 'job finished';
 ok $job->remove, 'job has been removed';
-is $job->state,  undef, 'no state';
+is $job->info->{state}, undef, 'no state';
 $oid = $minion->enqueue(add => [6, 5]);
 $job = $worker->dequeue;
 is $job->id, $oid, 'right object id';
 ok $job->fail,   'job failed';
 ok $job->remove, 'job has been removed';
-is $job->state,  undef, 'no state';
+is $job->info->{state}, undef, 'no state';
 $oid = $minion->enqueue(add => [5, 5]);
 $job = $minion->job($oid);
 ok $job->remove, 'job has been removed';
@@ -142,21 +209,20 @@ $minion->enqueue(add => [1, 2]);
 $oid = $minion->enqueue(add => [2, 4], {priority => 1});
 $job = $worker->register->dequeue;
 is $job->id, $oid, 'right object id';
-is $job->priority, 1, 'right priority';
+is $job->info->{priority}, 1, 'right priority';
 ok $job->finish, 'job finished';
 isnt $worker->dequeue->id, $oid, 'different object id';
 $worker->unregister;
 
 # Delayed jobs
-$oid = $minion->enqueue(
-  add => [2, 1] => {delayed => bson_time((time + 100) * 1000)});
+$oid = $minion->enqueue(add => [2, 1] => {delayed => (time + 100) * 1000});
 is $worker->register->dequeue, undef, 'too early for job';
 $doc = $jobs->find_one($oid);
 $doc->{delayed} = bson_time((time - 100) * 1000);
 $jobs->save($doc);
 $job = $worker->dequeue;
 is $job->id, $oid, 'right object id';
-like $job->delayed, qr/^[\d.]+$/, 'has delayed timestamp';
+like $job->info->{delayed}, qr/^[\d.]+$/, 'has delayed timestamp';
 ok $job->finish, 'job finished';
 $worker->unregister;
 
@@ -176,7 +242,7 @@ $worker = $minion->worker->register;
 $job    = $worker->dequeue;
 is $job->id, $result, 'right object id';
 is_deeply $job->args, [23], 'right arguments';
-is $job->priority, 1, 'right priority';
+is $job->info->{priority}, 1, 'right priority';
 ok $job->finish, 'job finished';
 $worker->unregister;
 
@@ -218,23 +284,23 @@ $worker->unregister;
 $oid = $minion->enqueue(add => [5, 6]);
 $job = $worker->register->dequeue;
 is $job->id, $oid, 'right object id';
-is $job->error, undef, 'no error';
+is $job->info->{error}, undef, 'no error';
 ok $job->fail, 'job failed';
 ok !$job->finish, 'job not finished';
-is $job->state, 'failed',         'right state';
-is $job->error, 'Unknown error.', 'right error';
+is $job->info->{state}, 'failed',         'right state';
+is $job->info->{error}, 'Unknown error.', 'right error';
 $oid = $minion->enqueue(add => [6, 7]);
 $job = $worker->dequeue;
 is $job->id, $oid, 'right object id';
 ok $job->fail('Something bad happened!'), 'job failed';
-is $job->state, 'failed', 'right state';
-is $job->error, 'Something bad happened!', 'right error';
+is $job->info->{state}, 'failed', 'right state';
+is $job->info->{error}, 'Something bad happened!', 'right error';
 $oid = $minion->enqueue('fail');
 $job = $worker->dequeue;
 is $job->id, $oid, 'right object id';
 $job->perform;
-is $job->state, 'failed', 'right state';
-is $job->error, "Intentional failure!\n", 'right error';
+is $job->info->{state}, 'failed', 'right state';
+is $job->info->{error}, "Intentional failure!\n", 'right error';
 $worker->unregister;
 
 # Exit
@@ -242,9 +308,9 @@ $oid = $minion->enqueue('exit');
 $job = $worker->register->dequeue;
 is $job->id, $oid, 'right object id';
 $job->perform;
-is $job->state, 'failed', 'right state';
-is $job->error, 'Non-zero exit status.', 'right error';
+is $job->info->{state}, 'failed', 'right state';
+is $job->info->{error}, 'Non-zero exit status.', 'right error';
 $worker->unregister;
-$_->drop for $workers, $jobs;
+$minion->reset;
 
 done_testing();

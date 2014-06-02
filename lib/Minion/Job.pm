@@ -1,24 +1,27 @@
 package Minion::Job;
 use Mojo::Base 'Mojo::EventEmitter';
 
-use Mango::BSON 'bson_time';
-
 has args => sub { [] };
 has [qw(id minion task)];
 
 sub app { shift->minion->app }
 
-sub created { shift->_time('created') }
+sub fail {
+  my $self = shift;
+  my $err = shift // 'Unknown error.';
+  return $self->minion->backend->fail_job($self->id, $err)
+    ? !!$self->emit(failed => $err)
+    : undef;
+}
 
-sub delayed { shift->_time('delayed') }
+sub finish {
+  my $self = shift;
+  return $self->minion->backend->finish_job($self->id)
+    ? !!$self->emit('finished')
+    : undef;
+}
 
-sub error { shift->_get('error') }
-
-sub fail { shift->_update(shift // 'Unknown error.') }
-
-sub finish { shift->_update }
-
-sub finished { shift->_time('finished') }
+sub info { $_[0]->minion->backend->job_info($_[0]->id) }
 
 sub perform {
   my $self = shift;
@@ -26,35 +29,9 @@ sub perform {
   $? ? $self->fail('Non-zero exit status.') : $self->finish;
 }
 
-sub priority { shift->_get('priority') }
+sub remove { $_[0]->minion->backend->remove_job($_[0]->id) }
 
-sub remove {
-  my $self   = shift;
-  my $states = [qw(failed finished inactive)];
-  return !!$self->minion->jobs->remove(
-    {_id => $self->id, state => {'$in' => $states}})->{n};
-}
-
-sub restart {
-  my $self = shift;
-
-  return !!$self->minion->jobs->update(
-    {_id => $self->id, state => {'$in' => [qw(failed finished)]}},
-    {
-      '$inc' => {restarts  => 1},
-      '$set' => {restarted => bson_time, state => 'inactive'},
-      '$unset' => {error => '', finished => '', started => '', worker => ''}
-    }
-  )->{n};
-}
-
-sub restarted { shift->_time('restarted') }
-
-sub restarts { shift->_get('restarts') // 0 }
-
-sub started { shift->_time('started') }
-
-sub state { shift->_get('state') }
+sub restart { $_[0]->minion->backend->restart_job($_[0]->id) }
 
 sub _child {
   my $self = shift;
@@ -71,31 +48,6 @@ sub _child {
   exit 0;
 }
 
-sub _get {
-  my ($self, $key) = @_;
-  return undef
-    unless my $job = $self->minion->jobs->find_one($self->id, {$key => 1});
-  return $job->{$key};
-}
-
-sub _time {
-  my $self = shift;
-  return undef unless my $time = $self->_get(@_);
-  return $time->to_epoch;
-}
-
-sub _update {
-  my ($self, $err) = @_;
-
-  my $doc
-    = {finished => bson_time, state => defined $err ? 'failed' : 'finished'};
-  $doc->{error} = $err if defined $err;
-  my $n = $self->minion->jobs->update({_id => $self->id, state => 'active'},
-    {'$set' => $doc})->{n};
-  $err ? $self->emit(failed => $err) : $self->emit('finished') if $n;
-  return !!$n;
-}
-
 1;
 
 =encoding utf8
@@ -108,7 +60,7 @@ Minion::Job - Minion job
 
   use Minion::Job;
 
-  my $job = Minion::Job->new(id => $oid, minion => $minion, task => 'foo');
+  my $job = Minion::Job->new(id => $id, minion => $minion, task => 'foo');
 
 =head1 DESCRIPTION
 
@@ -144,8 +96,8 @@ Emitted after this job transitioned to the C<finished> state.
 
   $job->on(finished => sub {
     my $job = shift;
-    my $oid = $job->id;
-    say "Job $oid is finished.";
+    my $id = $job->id;
+    say "Job $id is finished.";
   });
 
 =head1 ATTRIBUTES
@@ -161,8 +113,8 @@ Arguments passed to task.
 
 =head2 id
 
-  my $oid = $job->id;
-  $job    = $job->id($oid);
+  my $id = $job->id;
+  $job   = $job->id($id);
 
 Job id.
 
@@ -194,24 +146,6 @@ Get application from L<Minion/"app">.
   # Longer version
   my $app = $job->minion->app;
 
-=head2 created
-
-  my $epoch = $job->created;
-
-Time this job was created in floating seconds since the epoch.
-
-=head2 delayed
-
-  my $epoch = $job->delayed;
-
-Time this job was delayed to in floating seconds since the epoch.
-
-=head2 error
-
-  my $err = $job->error;
-
-Get error for C<failed> job.
-
 =head2 fail
 
   my $bool = $job->fail;
@@ -225,24 +159,17 @@ Transition from C<active> to C<failed> state.
 
 Transition from C<active> to C<finished> state.
 
-=head2 finished
+=head2 info
 
-  my $epoch = $job->finished;
+  my $info = $job->info;
 
-Time this job transitioned from C<active> to C<failed> or C<finished> in
-floating seconds since the epoch.
+Get job information.
 
 =head2 perform
 
   $job->perform;
 
 Perform job in new process and wait for it to finish.
-
-=head2 priority
-
-  my $priority = $job->priority;
-
-Get job priority.
 
 =head2 remove
 
@@ -255,33 +182,6 @@ Remove C<failed>, C<finished> or C<inactive> job from queue.
   my $bool = $job->restart;
 
 Transition from C<failed> or C<finished> state back to C<inactive>.
-
-=head2 restarted
-
-  my $epoch = $job->restarted;
-
-Time this job last transitioned from C<failed> or C<finished> back to
-C<inactive> in floating seconds since the epoch.
-
-=head2 restarts
-
-  my $num = $job->restarts;
-
-Get number of times this job has been restarted.
-
-=head2 started
-
-  my $epoch = $job->started;
-
-Time this job transitioned from C<inactive> to C<active> in floating seconds
-since the epoch.
-
-=head2 state
-
-  my $state = $job->state;
-
-Get current state of job, usually C<active>, C<failed>, C<finished> or
-C<inactive>.
 
 =head1 SEE ALSO
 

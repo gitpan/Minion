@@ -9,8 +9,7 @@ sub register {
 
   push @{$app->commands->namespaces}, 'Minion::Command';
 
-  my $minion = Minion->new;
-  $minion->mango->from_string($conf->{uri}) if $conf->{uri};
+  my $minion = Minion->new(each %$conf);
   weaken $minion->app($app)->{app};
   $app->helper(minion => sub {$minion});
 }
@@ -26,10 +25,10 @@ Mojolicious::Plugin::Minion - Minion job queue plugin
 =head1 SYNOPSIS
 
   # Mojolicious
-  $self->plugin(Minion => {uri => 'mongodb://127.0.0.1:27017'});
+  $self->plugin(Minion => {Mango => 'mongodb://127.0.0.1:27017'});
 
   # Mojolicious::Lite
-  plugin Minion => {uri => 'mongodb://127.0.0.1:27017'};
+  plugin Minion => {Mango => 'mongodb://127.0.0.1:27017'};
 
   # Add tasks to your application
   app->minion->add_task(slow_log => sub {
@@ -49,17 +48,6 @@ Mojolicious::Plugin::Minion - Minion job queue plugin
 
 L<Mojolicious::Plugin::Minion> is a L<Mojolicious> plugin for the L<Minion>
 job queue.
-
-=head1 OPTIONS
-
-L<Mojolicious::Plugin::Minion> supports the following options.
-
-=head2 uri
-
-  # Mojolicious::Lite
-  plugin Minion => {uri => 'mongodb://127.0.0.1:27017'};
-
-L<Mango> connection string.
 
 =head1 HELPERS
 
@@ -85,7 +73,7 @@ L<Mojolicious::Plugin> and implements the following new ones.
 
 =head2 register
 
-  $plugin->register(Mojolicious->new, {uri => 'mongodb://127.0.0.1:27017'});
+  $plugin->register(Mojolicious->new, {Mango => 'mongodb://127.0.0.1:27017'});
 
 Register plugin in L<Mojolicious> application.
 

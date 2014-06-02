@@ -1,4 +1,16 @@
 
+0.10  2014-06-02
+  - Removed created, delayed, error, finished, priority, restarted, restarts,
+    started and state methods from Minion::Job.
+  - Removed started method from Minion::Worker.
+  - Added support for pluggable backends.
+  - Added Minion::Backend and Minion::Backend::Mango.
+  - Added backend attribute to Minion.
+  - Added reset method to Minion.
+  - Added info method to Minion::Job.
+  - Added info method to Minion::Worker.
+  - Added -L and -S options to job command.
+
 0.09  2014-04-05
   - Added worker event to Minion.
   - Added dequeue event to Minion::Worker.

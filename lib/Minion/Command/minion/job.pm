@@ -2,7 +2,6 @@ package Minion::Command::minion::job;
 use Mojo::Base 'Mojolicious::Command';
 
 use Getopt::Long qw(GetOptionsFromArray :config no_auto_abbrev no_ignore_case);
-use Mango::BSON qw(bson_oid bson_time);
 use Mojo::JSON 'decode_json';
 use Mojo::Util 'dumper';
 use Time::Piece 'localtime';
@@ -16,22 +15,24 @@ sub run {
   my $args    = [];
   my $options = {};
   GetOptionsFromArray \@args,
-    'a|args=s' => sub { $args = decode_json($_[1]) },
-    'd|delayed=i' => sub { $options->{delayed} = bson_time($_[1] * 1000) },
-    'e|enqueue=s'  => \my $enqueue,
+    'a|args=s'    => sub { $args               = decode_json($_[1]) },
+    'd|delayed=i' => sub { $options->{delayed} = $_[1] * 1000 },
+    'e|enqueue=s' => \my $enqueue,
+    'L|limit=i' => \(my $limit = 100),
     'p|priority=i' => sub { $options->{priority} = $_[1] },
     'r|remove'     => \my $remove,
     'R|restart'    => \my $restart,
-    's|stats'      => \my $stats;
-  my $oid = @args ? bson_oid(shift @args) : undef;
+    's|stats'      => \my $stats,
+    'S|skip=i' => \(my $skip = 0);
+  my $id = @args ? shift @args : undef;
 
   # Enqueue
   return say $self->app->minion->enqueue($enqueue, $args, $options)
     if $enqueue;
 
   # Show stats or list jobs
-  return $stats ? $self->_stats : $self->_list unless $oid;
-  die "Job does not exist.\n" unless my $job = $self->app->minion->job($oid);
+  return $stats ? $self->_stats : $self->_list($skip, $limit) unless $id;
+  die "Job does not exist.\n" unless my $job = $self->app->minion->job($id);
 
   # Remove job
   return $job->remove ? 1 : die "Job is active.\n" if $remove;
@@ -47,30 +48,29 @@ sub _info {
   my ($self, $job) = @_;
 
   # Details
-  my $state    = $job->state;
-  my $priority = $job->priority;
-  my $restarts = $job->restarts;
-  print $job->task, " ($state, p$priority, r$restarts)\n", dumper($job->args);
-  my $err = $job->error;
+  my $info = $job->info;
+  my ($state, $priority, $restarts) = @$info{qw(state priority restarts)};
+  print $info->{task}, " ($state, p$priority, r$restarts)\n",
+    dumper($info->{args});
+  my $err = $info->{error};
   say chomp $err ? $err : $err if $err;
 
   # Timing
-  say localtime($job->created)->datetime, ' (created)';
-  my $delayed = $job->delayed;
+  say localtime($info->{created})->datetime, ' (created)';
+  my $delayed = $info->{delayed};
   say localtime($delayed)->datetime, ' (delayed)' if $delayed > time;
-  my $restarted = $job->restarted;
+  my $restarted = $info->{restarted};
   say localtime($restarted)->datetime, ' (restarted)' if $restarted;
-  my $started = $job->started;
+  my $started = $info->{started};
   say localtime($started)->datetime, ' (started)' if $started;
-  my $finished = $job->finished;
+  my $finished = $info->{finished};
   say localtime($finished)->datetime, ' (finished)' if $finished;
 }
 
 sub _list {
-  my $cursor = shift->app->minion->jobs->find->sort({_id => -1});
-  while (my $doc = $cursor->next) {
-    say sprintf '%s  %-8s  %s', @$doc{qw(_id state task)};
-  }
+  my ($self, $skip, $limit) = @_;
+  say sprintf '%s  %-8s  %s', @$_{qw(id state task)}
+    for @{$self->app->minion->backend->list_jobs($skip, $limit)};
 }
 
 sub _stats {
@@ -106,10 +106,14 @@ Minion::Command::minion::job - Minion job command
     -a, --args <JSON array>   Arguments for new job in JSON format.
     -d, --delayed <epoch>     Delay new job until after this point in time.
     -e, --enqueue <name>      New job to be enqueued.
+    -L, --limit <number>      Number of jobs to show when listing them,
+                              defaults to 100.
     -p, --priority <number>   Priority of new job, defaults to 0.
     -r, --remove              Remove job.
     -R, --restart             Restart job.
     -s, --stats               Show queue statistics.
+    -S, --skip <number>       Number of jobs to skip when listing them,
+                              defaults to 0.
 
 =head1 DESCRIPTION
 
