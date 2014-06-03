@@ -9,7 +9,7 @@ use Mojo::Server;
 use Mojo::URL;
 use Scalar::Util 'weaken';
 
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 
 has app => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
 has [qw(auto_perform backend)];
@@ -235,9 +235,9 @@ These options are currently available:
 
 =item delayed
 
-  delayed => (time + 1) * 1000
+  delayed => time + 1
 
-Delay job until after this point in time in milliseconds since the UNIX epoch.
+Delay job until after this point in time in floating seconds since the epoch.
 
 =item priority
 
