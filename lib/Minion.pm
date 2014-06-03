@@ -9,7 +9,7 @@ use Mojo::Server;
 use Mojo::URL;
 use Scalar::Util 'weaken';
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 
 has app => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
 has [qw(auto_perform backend)];
@@ -40,8 +40,7 @@ sub enqueue {
 sub job {
   my ($self, $id) = @_;
 
-  my $job = $self->backend->job_info($id);
-  return undef unless $job->{state};
+  return undef unless my $job = $self->backend->job_info($id);
   return Minion::Job->new(
     args   => $job->{args},
     id     => $id,
@@ -118,7 +117,7 @@ Minion - Job queue
 
   # Enqueue jobs
   $minion->enqueue(something_slow => ['foo', 'bar']);
-  $minion->enqueue(something_slow => [1, 2, 3]);
+  $minion->enqueue(something_slow => [1, 2, 3] => {priority => 5});
 
   # Perform jobs automatically for testing
   $minion->auto_perform(1);
@@ -238,7 +237,7 @@ These options are currently available:
 
   delayed => (time + 1) * 1000
 
-Delay job until after this point in time.
+Delay job until after this point in time in milliseconds since the UNIX epoch.
 
 =item priority
 
