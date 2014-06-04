@@ -9,7 +9,7 @@ use Mojo::Server;
 use Mojo::URL;
 use Scalar::Util 'weaken';
 
-our $VERSION = '0.14';
+our $VERSION = '0.15';
 
 has app => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
 has [qw(auto_perform backend)];
@@ -43,7 +43,7 @@ sub job {
   return undef unless my $job = $self->backend->job_info($id);
   return Minion::Job->new(
     args   => $job->{args},
-    id     => $id,
+    id     => $job->{id},
     minion => $self,
     task   => $job->{task}
   );
