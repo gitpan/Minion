@@ -1,25 +1,29 @@
 use Mojo::Base -strict;
 
 use Test::More;
-
-plan skip_all => 'set TEST_ONLINE to enable this test'
-  unless $ENV{TEST_ONLINE};
-
+use File::Spec::Functions 'catfile';
+use File::Temp 'tempdir';
 use Mojolicious::Lite;
+use Storable qw(store retrieve);
 use Test::Mojo;
 
-plugin Minion => {Mango => $ENV{TEST_ONLINE}};
+my $tmpdir = tempdir CLEANUP => 1;
+my $file = catfile $tmpdir, 'minion.data';
 
-# Clean up before start
-app->minion->backend->prefix('minion_lite_app_test')->reset;
+# Missing backend
+eval { plugin Minion => {Something => 'fun'} };
+like $@, qr/^Backend "Minion::Backend::Something" missing/, 'right error';
 
-my $count = app->minion->backend->jobs->insert({count => 0});
+plugin Minion => {File => $file};
+
+my $results = catfile $tmpdir, 'results.data';
+store {count => 0}, $results;
 app->minion->add_task(
   increment => sub {
-    my $job = shift;
-    my $doc = $job->app->minion->backend->jobs->find_one($count);
-    $doc->{count}++;
-    $job->minion->backend->jobs->save($doc);
+    my $job    = shift;
+    my $result = retrieve $results;
+    $result->{count}++;
+    store $result, $results;
   }
 );
 
@@ -37,8 +41,7 @@ get '/non_blocking_increment' => sub {
 
 get '/count' => sub {
   my $self = shift;
-  $self->render(
-    text => $self->minion->backend->jobs->find_one($count)->{count});
+  $self->render(text => retrieve($results)->{count});
 };
 
 my $t = Test::Mojo->new;
@@ -58,6 +61,5 @@ $t->get_ok('/count')->status_is(200)->content_is('4');
 $t->get_ok('/non_blocking_increment')->status_is(200)
   ->content_is('Incrementing soon too!');
 $t->get_ok('/count')->status_is(200)->content_is('5');
-app->minion->reset;
 
 done_testing();

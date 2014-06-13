@@ -2,20 +2,17 @@ use Mojo::Base -strict;
 
 use Test::More;
 
-plan skip_all => 'set TEST_ONLINE to enable this test'
-  unless $ENV{TEST_ONLINE};
-
-use Mango::BSON qw(bson_oid bson_time);
+use File::Spec::Functions 'catfile';
+use File::Temp 'tempdir';
 use Minion;
 use Mojo::IOLoop;
+use Storable qw(retrieve store);
 use Sys::Hostname 'hostname';
 
 # Clean up before start
-my $minion = Minion->new(Mango => $ENV{TEST_ONLINE});
-is $minion->backend->prefix, 'minion', 'right prefix';
-my $workers = $minion->backend->workers;
-my $jobs    = $minion->backend->prefix('jobs_test')->jobs;
-is $jobs->name, 'jobs_test.jobs', 'right name';
+my $tmpdir = tempdir CLEANUP => 1;
+my $file = catfile $tmpdir, 'minion.data';
+my $minion = Minion->new(File => $file);
 $minion->reset;
 
 # Nothing to repair
@@ -41,13 +38,15 @@ is $worker2->info->{jobs}[0], $job->id, 'right id';
 $id = $worker2->id;
 undef $worker2;
 is $job->info->{state}, 'active', 'job is still active';
-my $doc = $workers->find_one($id);
-ok $doc, 'is registered';
+my $guard = $minion->backend->_guard->_write;
+my $info  = $guard->_workers->{$id};
+ok $info, 'is registered';
 my $pid = 4000;
 $pid++ while kill 0, $pid;
-$workers->save({%$doc, pid => $pid});
+$info->{pid} = $pid;
+undef $guard;
 $minion->repair;
-ok !$minion->backend->worker_info($id), 'not registered';
+ok !$minion->worker->id($id)->info, 'not registered';
 is $job->info->{state}, 'failed',           'job is no longer active';
 is $job->info->{error}, 'Worker went away', 'right error';
 
@@ -82,17 +81,18 @@ $worker2->unregister;
 
 # Reset
 $minion->reset->repair;
-ok !$minion->backend->jobs->options,    'no jobs';
-ok !$minion->backend->workers->options, 'no workers';
+ok !keys %{$minion->backend->_guard->_jobs},    'no jobs';
+ok !keys %{$minion->backend->_guard->_workers}, 'no workers';
 
 # Tasks
-my $add = $jobs->insert({results => []});
+my $results = catfile $tmpdir, 'results.data';
+store [], $results;
 $minion->add_task(
   add => sub {
     my ($job, $first, $second) = @_;
-    my $doc = $job->minion->backend->jobs->find_one($add);
-    push @{$doc->{results}}, $first + $second;
-    $job->minion->backend->jobs->save($doc);
+    my $result = retrieve $results;
+    push @$result, $first + $second;
+    store $result, $results;
   }
 );
 $minion->add_task(fail => sub { die "Intentional failure!\n" });
@@ -160,15 +160,17 @@ is $batch->[0]{restarts}, 0, 'job has not been restarted';
 ok !$batch->[1], 'no more results';
 
 # Enqueue, dequeue and perform
-is $minion->job(bson_oid), undef, 'job does not exist';
+is $minion->job(12345), undef, 'job does not exist';
 $id = $minion->enqueue(add => [2, 2]);
-my $info = $minion->job($id)->info;
-is $info->{task}, 'add', 'right task';
+ok $minion->job($id), 'job does exist';
+$info = $minion->job($id)->info;
 is_deeply $info->{args}, [2, 2], 'right arguments';
 is $info->{priority}, 0,          'right priority';
 is $info->{state},    'inactive', 'right state';
 $worker = $minion->worker;
+my $before = (stat $minion->backend->file)[9];
 is $worker->dequeue, undef, 'not registered';
+is $before, (stat $minion->backend->file)[9], 'file has not changed';
 ok !$minion->job($id)->info->{started}, 'no started timestamp';
 $job = $worker->register->dequeue;
 like $job->info->{created}, qr/^[\d.]+$/, 'has created timestamp';
@@ -181,7 +183,7 @@ is $minion->backend->worker_info($id)->{pid}, $$, 'right worker';
 ok !$job->info->{finished}, 'no finished timestamp';
 $job->perform;
 like $job->info->{finished}, qr/^[\d.]+$/, 'has finished timestamp';
-is_deeply $jobs->find_one($add)->{results}, [4], 'right result';
+is_deeply retrieve($results), [4], 'right result';
 is $job->info->{state}, 'finished', 'right state';
 $worker->unregister;
 $job = $minion->job($job->id);
@@ -243,10 +245,11 @@ $worker->unregister;
 my $epoch = time + 100;
 $id = $minion->enqueue(add => [2, 1] => {delayed => $epoch});
 is $worker->register->dequeue, undef, 'too early for job';
-$doc = $jobs->find_one($id);
-is $doc->{delayed}->to_epoch, $epoch, 'right delayed timestamp';
-$doc->{delayed} = bson_time((time - 100) * 1000);
-$jobs->save($doc);
+is $minion->job($id)->info->{delayed}, $epoch, 'right delayed timestamp';
+$guard           = $minion->backend->_guard->_write;
+$info            = $guard->_jobs->{$id};
+$info->{delayed} = time - 100;
+undef $guard;
 $job = $worker->dequeue;
 is $job->id, $id, 'right id';
 like $job->info->{delayed}, qr/^[\d.]+$/, 'has delayed timestamp';
@@ -273,6 +276,40 @@ is $job->info->{priority}, 1, 'right priority';
 ok $job->finish, 'job finished';
 $worker->unregister;
 
+# Events
+my ($failed, $finished) = (0, 0);
+$minion->on(
+  worker => sub {
+    my ($minion, $worker) = @_;
+    $worker->on(
+      dequeue => sub {
+        my ($worker, $job) = @_;
+        $job->on(failed   => sub { $failed++ });
+        $job->on(finished => sub { $finished++ });
+      }
+    );
+  }
+);
+$worker = $minion->worker->register;
+$minion->enqueue(add => [3, 3]);
+$minion->enqueue(add => [4, 3]);
+$job = $worker->dequeue;
+is $failed,   0, 'failed event has not been emitted';
+is $finished, 0, 'finished event has not been emitted';
+$job->finish;
+$job->finish;
+is $failed,   0, 'failed event has not been emitted';
+is $finished, 1, 'finished event has been emitted once';
+$job = $worker->dequeue;
+my $err;
+$job->on(failed => sub { $err = pop });
+$job->fail("test\n");
+$job->fail;
+is $err,      "test\n", 'right error';
+is $failed,   1,        'failed event has been emitted once';
+is $finished, 1,        'finished event has been emitted once';
+$worker->unregister;
+
 # Failed jobs
 $id = $minion->enqueue(add => [5, 6]);
 $job = $worker->register->dequeue;
@@ -294,6 +331,16 @@ is $job->id, $id, 'right id';
 $job->perform;
 is $job->info->{state}, 'failed', 'right state';
 is $job->info->{error}, "Intentional failure!\n", 'right error';
+$worker->unregister;
+
+# Exit
+$minion->add_task(exit => sub { exit 1 });
+$id  = $minion->enqueue('exit');
+$job = $worker->register->dequeue;
+is $job->id, $id, 'right id';
+$job->perform;
+is $job->info->{state}, 'failed', 'right state';
+is $job->info->{error}, 'Non-zero exit status', 'right error';
 $worker->unregister;
 $minion->reset;
 

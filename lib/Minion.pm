@@ -9,7 +9,7 @@ use Mojo::Server;
 use Mojo::URL;
 use Scalar::Util 'weaken';
 
-our $VERSION = '0.15';
+our $VERSION = '0.20';
 
 has app => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
 has [qw(auto_perform backend)];
@@ -54,7 +54,7 @@ sub new {
 
   my $class = 'Minion::Backend::' . shift;
   my $e     = Mojo::Loader->new->load($class);
-  croak ref $e ? $e : qq{Missing backend "$class"} if $e;
+  croak ref $e ? $e : qq{Backend "$class" missing} if $e;
 
   $self->backend($class->new(@_));
   weaken $self->backend->minion($self)->{minion};
@@ -106,6 +106,7 @@ Minion - Job queue
   use Minion;
 
   # Connect to backend
+  my $minion = Minion->new(File  => '/Users/sri/minion.data');
   my $minion = Minion->new(Mango => 'mongodb://localhost:27017');
 
   # Add tasks
@@ -130,7 +131,8 @@ Minion - Job queue
 
 =head1 DESCRIPTION
 
-L<Minion> is a job queue for the L<Mojolicious> real-time web framework.
+L<Minion> is a job queue for the L<Mojolicious> real-time web framework with
+support for multiple backends.
 
 Background worker processes are usually started with the command
 L<Minion::Command::minion::worker>, which becomes automatically available when
@@ -192,9 +194,10 @@ L</"enqueue">, very useful for testing.
 =head2 backend
 
   my $backend = $minion->backend;
-  $minion     = $minion->backend(Minion::Backend::Mango->new);
+  $minion     = $minion->backend(Minion::Backend::File->new);
 
-Backend.
+Backend, usually a L<Minion::Backend::File> or L<Minion::Backend::Mango>
+object.
 
 =head2 tasks
 
@@ -256,7 +259,7 @@ return C<undef> if job does not exist.
 
 =head2 new
 
-  my $minion = Minion->new(Mango => 'mongodb://127.0.0.1:27017');
+  my $minion = Minion->new(File => '/Users/sri/minion.data');
 
 Construct a new L<Minion> object.
 
