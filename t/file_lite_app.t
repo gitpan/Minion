@@ -1,5 +1,7 @@
 use Mojo::Base -strict;
 
+BEGIN { $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll' }
+
 use Test::More;
 use File::Spec::Functions 'catfile';
 use File::Temp 'tempdir';
@@ -20,10 +22,16 @@ my $results = catfile $tmpdir, 'results.data';
 store {count => 0}, $results;
 app->minion->add_task(
   increment => sub {
-    my $job    = shift;
-    my $result = retrieve $results;
-    $result->{count}++;
-    store $result, $results;
+    my $job = shift;
+    Mojo::IOLoop->next_tick(
+      sub {
+        my $result = retrieve $results;
+        $result->{count}++;
+        store $result, $results;
+        Mojo::IOLoop->stop;
+      }
+    );
+    Mojo::IOLoop->start;
   }
 );
 
