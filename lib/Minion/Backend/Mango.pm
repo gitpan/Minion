@@ -40,7 +40,8 @@ sub enqueue {
   my $doc = {
     args    => $args,
     created => bson_time,
-    delayed => bson_time($options->{delayed} ? $options->{delayed} * 1000 : 1),
+    delayed =>
+      bson_time($options->{delay} ? (time + $options->{delay}) * 1000 : 1),
     priority => $options->{priority} // 0,
     state    => 'inactive',
     task     => $task

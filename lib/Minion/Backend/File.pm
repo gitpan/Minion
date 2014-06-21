@@ -43,7 +43,7 @@ sub enqueue {
   my $job = {
     args    => $args,
     created => time,
-    delayed => $options->{delayed} ? $options->{delayed} : 1,
+    delayed => $options->{delay} ? (time + $options->{delay}) : 1,
     id      => bson_oid,
     priority => $options->{priority} // 0,
     restarts => 0,

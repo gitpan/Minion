@@ -14,7 +14,7 @@ has 'backend';
 has remove_after => 864000;
 has tasks => sub { {} };
 
-our $VERSION = '0.26';
+our $VERSION = '0.27';
 
 sub add_task {
   my ($self, $name, $cb) = @_;
@@ -228,11 +228,11 @@ These options are currently available:
 
 =over 2
 
-=item delayed
+=item delay
 
-  delayed => time + 1
+  delay => 10
 
-Delay job until after this point in time in floating seconds since the epoch.
+Delay job for this many seconds from now.
 
 =item priority
 
