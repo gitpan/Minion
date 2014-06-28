@@ -36,20 +36,20 @@ app->minion->add_task(
 );
 
 get '/increment' => sub {
-  my $self = shift;
-  $self->minion->enqueue('increment');
-  $self->render(text => 'Incrementing soon!');
+  my $c = shift;
+  $c->minion->enqueue('increment');
+  $c->render(text => 'Incrementing soon!');
 };
 
 get '/non_blocking_increment' => sub {
-  my $self = shift;
-  $self->minion->enqueue(
-    increment => sub { $self->render(text => 'Incrementing soon too!') });
+  my $c = shift;
+  $c->minion->enqueue(
+    increment => sub { $c->render(text => 'Incrementing soon too!') });
 };
 
 get '/count' => sub {
-  my $self = shift;
-  $self->render(text => retrieve($results)->{count});
+  my $c = shift;
+  $c->render(text => retrieve($results)->{count});
 };
 
 my $t = Test::Mojo->new;
@@ -60,7 +60,7 @@ $t->app->minion->perform_jobs;
 $t->get_ok('/count')->status_is(200)->content_is('1');
 $t->get_ok('/increment')->status_is(200)->content_is('Incrementing soon!');
 $t->get_ok('/increment')->status_is(200)->content_is('Incrementing soon!');
-$t->app->minion->perform_jobs;
+Mojo::IOLoop->delay(sub { $t->app->minion->perform_jobs })->wait;
 $t->get_ok('/count')->status_is(200)->content_is('3');
 
 # Perform jobs automatically (non-blocking)

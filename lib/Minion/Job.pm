@@ -38,7 +38,7 @@ sub _child {
 
   # Parent
   die "Can't fork: $!" unless defined(my $pid = fork);
-  return $pid if $pid;
+  $self->emit(spawn => $pid) and return $pid if $pid;
 
   # Reset event loop
   Mojo::IOLoop->reset;
@@ -101,6 +101,21 @@ Emitted after this job transitioned to the C<finished> state.
     my $job = shift;
     my $id = $job->id;
     say "Job $id is finished.";
+  });
+
+=head2 spawn
+
+  $job->on(spawn => sub {
+    my ($job, $pid) = @_;
+    ...
+  });
+
+Emitted after a process has been spawned to process this job.
+
+  $job->on(spawn => sub {
+    my ($job, $pid) = @_;
+    my $id = $job->id;
+    say "Job $id running in process $pid";
   });
 
 =head1 ATTRIBUTES

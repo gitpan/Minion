@@ -298,6 +298,7 @@ ok $job->finish, 'job finished';
 $worker->unregister;
 
 # Events
+$pid = $$;
 my ($failed, $finished) = (0, 0);
 $minion->on(
   worker => sub {
@@ -307,6 +308,7 @@ $minion->on(
         my ($worker, $job) = @_;
         $job->on(failed   => sub { $failed++ });
         $job->on(finished => sub { $finished++ });
+        $job->on(spawn    => sub { $pid = pop });
       }
     );
   }
@@ -318,9 +320,10 @@ $job = $worker->dequeue;
 is $failed,   0, 'failed event has not been emitted';
 is $finished, 0, 'finished event has not been emitted';
 $job->finish;
-$job->finish;
+$job->perform;
 is $failed,   0, 'failed event has not been emitted';
 is $finished, 1, 'finished event has been emitted once';
+isnt $pid, $$, 'new process id';
 $job = $worker->dequeue;
 my $err;
 $job->on(failed => sub { $err = pop });

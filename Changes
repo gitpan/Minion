@@ -1,4 +1,7 @@
 
+0.28  2014-06-28
+  - Added spawn event to Minion::Job.
+
 0.27  2014-06-21
   - Replaced delayed option with delay.
 
