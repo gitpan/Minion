@@ -14,7 +14,7 @@ has 'backend';
 has remove_after => 864000;
 has tasks => sub { {} };
 
-our $VERSION = '0.28';
+our $VERSION = '0.29';
 
 sub add_task {
   my ($self, $name, $cb) = @_;
@@ -265,9 +265,9 @@ Perform all jobs, very useful for testing.
 
   $minion = $minion->repair;
 
-Repair worker registry and job queue. All processes running this method and
-workers on this host should be owned by the same user, so they can check which
-workers are still alive with signals.
+Repair worker registry and job queue if necessary. All processes running this
+method and workers on this host should be owned by the same user, so they can
+check which workers are still alive with signals.
 
 =head2 reset
 
