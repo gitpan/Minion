@@ -76,8 +76,20 @@ sub finish_job { shift->_update(0, @_) }
 
 sub job_info { $_[0]->_job_info($_[0]->jobs->find_one(bson_oid($_[1]))) }
 
-sub list_jobs    { shift->_list('jobs',    'state', @_) }
-sub list_workers { shift->_list('workers', 'pid',   @_) }
+sub list_jobs {
+  my ($self, $skip, $limit, $state) = @_;
+  my $cursor
+    = $self->jobs->find({state => $state ? $state : {'$exists' => \1}});
+  $cursor->sort({_id => -1})->skip($skip)->limit($limit);
+  return [map { $self->_job_info($_) } @{$cursor->all}];
+}
+
+sub list_workers {
+  my ($self, $skip, $limit) = @_;
+  my $cursor = $self->workers->find({pid => {'$exists' => \1}});
+  $cursor->sort({_id => -1})->skip($skip)->limit($limit);
+  return [map { $self->_worker_info($_) } @{$cursor->all}];
+}
 
 sub new { shift->SUPER::new(mango => Mango->new(@_)) }
 
@@ -146,6 +158,18 @@ sub unregister_worker { shift->workers->remove(shift) }
 
 sub worker_info { $_[0]->_worker_info($_[0]->workers->find_one($_[1])) }
 
+sub _await {
+  my $self = shift;
+
+  my $last = $self->{last} //= bson_oid(0 x 24);
+  my $cursor
+    = $self->notifications->find({_id => {'$gt' => $last}, c => 'created'})
+    ->tailable(1)->await_data(1);
+  return undef unless my $doc = $cursor->next || $cursor->next;
+  $self->{last} = $doc->{_id};
+  return 1;
+}
+
 sub _job_info {
   my $self = shift;
 
@@ -164,27 +188,6 @@ sub _job_info {
     state   => $job->{state},
     task    => $job->{task}
   };
-}
-
-sub _await {
-  my $self = shift;
-
-  my $last = $self->{last} //= bson_oid(0 x 24);
-  my $cursor
-    = $self->notifications->find({_id => {'$gt' => $last}, c => 'created'})
-    ->tailable(1)->await_data(1);
-  return undef unless my $doc = $cursor->next || $cursor->next;
-  $self->{last} = $doc->{_id};
-  return 1;
-}
-
-sub _list {
-  my ($self, $name, $field, $skip, $limit) = @_;
-
-  my $cursor = $self->$name->find({$field => {'$exists' => \1}});
-  $cursor->sort({_id => -1})->skip($skip)->limit($limit);
-  my $sub = $name eq 'jobs' ? \&_job_info : \&_worker_info;
-  return [map { $self->$sub($_) } @{$cursor->all}];
 }
 
 sub _notifications {
@@ -351,6 +354,7 @@ Get information about a job or return C<undef> if job does not exist.
 =head2 list_jobs
 
   my $batch = $backend->list_jobs($skip, $limit);
+  my $batch = $backend->list_jobs($skip, $limit, $state);
 
 Returns the same information as L</"job_info"> but in batches.
 
