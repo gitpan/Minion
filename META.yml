@@ -23,9 +23,6 @@ requires:
   Mojolicious: '5.33'
   perl: '5.010001'
 resources:
-  MailingList: http://groups.google.com/group/mojolicious
-  bugtracker: http://github.com/kraih/minion/issues
+  IRC: irc://irc.perl.org/#mojo
   homepage: http://mojolicio.us
-  license: http://www.opensource.org/licenses/artistic-license-2.0
-  repository: http://github.com/kraih/minion
-version: '0.35'
+version: '0.36'
