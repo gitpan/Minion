@@ -24,5 +24,8 @@ requires:
   perl: '5.010001'
 resources:
   IRC: irc://irc.perl.org/#mojo
+  bugtracker: https://github.com/kraih/minion/issues
   homepage: http://mojolicio.us
-version: '0.36'
+  license: http://www.opensource.org/licenses/artistic-license-2.0
+  repository: https://github.com/kraih/minion.git
+version: '0.37'

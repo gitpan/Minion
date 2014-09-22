@@ -41,8 +41,17 @@
    },
    "release_status" : "stable",
    "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/kraih/minion/issues"
+      },
       "homepage" : "http://mojolicio.us",
+      "license" : [
+         "http://www.opensource.org/licenses/artistic-license-2.0"
+      ],
+      "repository" : {
+         "url" : "https://github.com/kraih/minion.git"
+      },
       "x_IRC" : "irc://irc.perl.org/#mojo"
    },
-   "version" : "0.36"
+   "version" : "0.37"
 }
