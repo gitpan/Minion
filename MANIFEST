@@ -3,7 +3,6 @@ CONTRIBUTING.md
 lib/Minion.pm
 lib/Minion/Backend.pm
 lib/Minion/Backend/File.pm
-lib/Minion/Backend/Mango.pm
 lib/Minion/Command/minion.pm
 lib/Minion/Command/minion/job.pm
 lib/Minion/Command/minion/worker.pm
@@ -18,7 +17,6 @@ README.md
 t/commands.t
 t/file.t
 t/file_lite_app.t
-t/mango.t
 t/pod.t
 t/pod_coverage.t
 META.yml                                 Module YAML meta-data (added by MakeMaker)
