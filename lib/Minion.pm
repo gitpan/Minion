@@ -14,7 +14,7 @@ has 'backend';
 has remove_after => 864000;
 has tasks => sub { {} };
 
-our $VERSION = '0.38';
+our $VERSION = '0.39';
 
 sub add_task {
   my ($self, $name, $cb) = @_;
@@ -87,7 +87,7 @@ Minion - Job queue
   use Minion;
 
   # Connect to backend
-  my $minion = Minion->new(File  => '/Users/sri/minion.data');
+  my $minion = Minion->new(File  => '/Users/sri/minion.db');
 
   # Add tasks
   $minion->add_task(something_slow => sub {
@@ -111,8 +111,8 @@ Minion - Job queue
 
 =head1 DESCRIPTION
 
-L<Minion> is a job queue for the L<Mojolicious> real-time web framework with
-support for multiple backends.
+L<Minion> is a job queue for the L<Mojolicious|http://mojolicio.us> real-time
+web framework with support for multiple backends.
 
 Background worker processes are usually started with the command
 L<Minion::Command::minion::worker>, which becomes automatically available when
@@ -127,10 +127,6 @@ L<Minion::Command::minion::job>.
 
 Note that this whole distribution is EXPERIMENTAL and will change without
 warning!
-
-Most of the API is not changing much anymore, but you should wait for a stable
-1.0 release before using any of the modules in this distribution in a
-production environment.
 
 =head1 EVENTS
 
@@ -203,7 +199,8 @@ Register a new task.
   my $id = $minion->enqueue(foo => [@args]);
   my $id = $minion->enqueue(foo => [@args] => {priority => 1});
 
-Enqueue a new job with C<inactive> state.
+Enqueue a new job with C<inactive> state. Arguments get serialized, so you
+shouldn't send objects.
 
 These options are currently available:
 
@@ -232,7 +229,7 @@ return C<undef> if job does not exist.
 
 =head2 new
 
-  my $minion = Minion->new(File => '/Users/sri/minion.data');
+  my $minion = Minion->new(File => '/Users/sri/minion.db');
 
 Construct a new L<Minion> object.
 

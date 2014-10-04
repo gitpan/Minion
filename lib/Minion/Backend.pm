@@ -81,7 +81,7 @@ following new ones.
 
 =head2 dequeue
 
-  my $info = $backend->dequeue($worker_id, 0.5);
+  my $job_info = $backend->dequeue($worker_id, 0.5);
 
 Wait for job, dequeue it and transition from C<inactive> to C<active> state or
 return C<undef> if queue was empty. Meant to be overloaded in a subclass.
@@ -130,15 +130,15 @@ subclass.
 
 =head2 job_info
 
-  my $info = $backend->job_info($job_id);
+  my $job_info = $backend->job_info($job_id);
 
 Get information about a job or return C<undef> if job does not exist. Meant to
 be overloaded in a subclass.
 
 =head2 list_jobs
 
-  my $batch = $backend->list_jobs($skip, $limit);
-  my $batch = $backend->list_jobs($skip, $limit, {state => 'inactive'});
+  my $batch = $backend->list_jobs($offset, $limit);
+  my $batch = $backend->list_jobs($offset, $limit, {state => 'inactive'});
 
 Returns the same information as L</"job_info"> but in batches. Meant to be
 overloaded in a subclass.
@@ -163,7 +163,7 @@ List only jobs for this task.
 
 =head2 list_workers
 
-  my $batch = $backend->list_workers($skip, $limit);
+  my $batch = $backend->list_workers($offset, $limit);
 
 Returns the same information as L</"worker_info"> but in batches. Meant to be
 overloaded in a subclass.
@@ -215,7 +215,7 @@ Unregister worker. Meant to be overloaded in a subclass.
 
 =head2 worker_info
 
-  my $info = $backend->worker_info($worker_id);
+  my $worker_info = $backend->worker_info($worker_id);
 
 Get information about a worker or return C<undef> if worker does not exist.
 Meant to be overloaded in a subclass.
