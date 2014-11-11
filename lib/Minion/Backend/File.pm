@@ -38,8 +38,7 @@ sub enqueue {
   return $job->{id};
 }
 
-sub fail_job { shift->_update(1, @_) }
-
+sub fail_job   { shift->_update(1, @_) }
 sub finish_job { shift->_update(0, @_) }
 
 sub job_info {
@@ -110,7 +109,7 @@ sub repair {
   my $jobs = $self->_jobs;
   for my $job (values %$jobs) {
     next if $job->{state} ne 'active' || $workers->{$job->{worker}};
-    @$job{qw(error state)} = ('Worker went away', 'failed');
+    @$job{qw(result state)} = ('Worker went away', 'failed');
   }
 
   # Old jobs
@@ -132,7 +131,7 @@ sub retry_job {
   if ($job) {
     $job->{retries} += 1;
     @$job{qw(retried state)} = (time, 'inactive');
-    delete $job->{$_} for qw(error finished result started worker);
+    delete $job->{$_} for qw(finished result started worker);
   }
   $db->unlock;
 
@@ -197,15 +196,14 @@ sub _try {
 }
 
 sub _update {
-  my ($self, $fail, $id, $err) = @_;
+  my ($self, $fail, $id, $result) = @_;
 
   my $db = $self->db;
   $db->lock_exclusive;
   my $job = $self->_job($id, 'active');
   if ($job) {
-    $job->{finished} = time;
-    $job->{state}    = $fail ? 'failed' : 'finished';
-    $job->{error}    = $err if $err;
+    @$job{qw(finished result)} = (time, $result);
+    $job->{state} = $fail ? 'failed' : 'finished';
   }
   $db->unlock;
 
@@ -296,12 +294,15 @@ Job priority, defaults to C<0>.
 
   my $bool = $backend->fail_job($job_id);
   my $bool = $backend->fail_job($job_id, 'Something went wrong!');
+  my $bool = $backend->fail_job($job_id, {msg => 'Something went wrong!'});
 
 Transition from C<active> to C<failed> state.
 
 =head2 finish_job
 
   my $bool = $backend->finish_job($job_id);
+  my $bool = $backend->finish_job($job_id, 'All went well!');
+  my $bool = $backend->finish_job($job_id, {msg => 'All went well!'});
 
 Transition from C<active> to C<finished> state.
 
