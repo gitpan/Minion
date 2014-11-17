@@ -1,17 +1,26 @@
 package Minion::Backend::Pg;
 use Mojo::Base 'Minion::Backend';
 
+use Mojo::IOLoop;
 use Mojo::JSON qw(decode_json encode_json);
 use Mojo::Pg;
 use Sys::Hostname 'hostname';
-use Time::HiRes 'usleep';
 
 has 'pg';
 
 sub dequeue {
   my ($self, $id, $timeout) = @_;
-  usleep $timeout * 1000000 unless my $job = $self->_try($id);
-  return $job || $self->_try($id);
+
+  if (my $job = $self->_try($id)) { return $job }
+
+  my $db = $self->pg->db;
+  $db->listen('minion.job')->on(notification => sub { Mojo::IOLoop->stop });
+  my $timer = Mojo::IOLoop->timer($timeout => sub { Mojo::IOLoop->stop });
+  Mojo::IOLoop->start;
+  $db->unlisten('*') and Mojo::IOLoop->remove($timer);
+  undef $db;
+
+  return $self->_try($id);
 }
 
 sub enqueue {
@@ -19,7 +28,8 @@ sub enqueue {
   my $args    = shift // [];
   my $options = shift // {};
 
-  return $self->pg->db->query(
+  my $db = $self->pg->db;
+  return $db->query(
     "insert into minion_jobs
        (args, created, delayed, priority, retries, state, task)
      values
@@ -55,21 +65,26 @@ sub list_jobs {
   push @and, 'task = ?' and push @values, $options->{task} if $options->{task};
   my $where = @and ? 'where ' . join(' and ', @and) : '';
 
-  my $results = $self->pg->db->query(
+  return $self->pg->db->query(
     "select id
      from minion_jobs
      $where
      order by id desc
      limit ?
      offset ?", @values, $limit, $offset
-  );
-  return $results->arrays->map(sub { $self->job_info($_->[0]) })->to_array;
+  )->arrays->map(sub { $self->job_info($_->[0]) })->to_array;
 }
 
 sub list_workers {
   my ($self, $offset, $limit) = @_;
-  my @workers = sort { $b->{id} <=> $a->{id} } values %{$self->_workers};
-  return [grep {defined} @workers[$offset .. ($offset + $limit - 1)]];
+
+  return $self->pg->db->query(
+    'select id
+     from minion_workers
+     order by id desc
+     limit ?
+     offset ?', $limit, $offset
+  )->arrays->map(sub { $self->worker_info($_->[0]) })->to_array;
 }
 
 sub new {
@@ -100,11 +115,11 @@ sub repair {
   my $self = shift;
 
   # Check workers on this host (all should be owned by the same user)
-  my $workers = $self->_workers;
-  my $db      = $self->pg->db;
-  my $host    = hostname;
-  my @dead    = map { $_->{id} }
-    grep { $_->{host} eq $host && !kill 0, $_->{pid} } values %$workers;
+  my $db = $self->pg->db;
+  my $workers
+    = $db->query('select id, host, pid from minion_workers where host = ?',
+    hostname)->hashes;
+  my @dead = map { $_->{id} } grep { !kill 0, $_->{pid} } $workers->each;
   $db->query("delete from minion_workers where id = any (?)", \@dead) if @dead;
 
   # Abandoned jobs
@@ -118,8 +133,7 @@ sub repair {
   # Old jobs
   $db->query(
     "delete from minion_jobs
-     where state = 'finished'
-       and finished < now() - interval '1 second' * ?",
+     where state = 'finished' and finished < now() - interval '1 second' * ?",
     $self->minion->remove_after
   );
 }
@@ -132,11 +146,11 @@ sub reset {
 sub retry_job {
   !!shift->pg->db->query(
     "update minion_jobs
-       set finished = null, result = null, retried = now(),
-         retries = retries + 1, started = null, state = 'inactive',
-         worker = null
-       where id = ? and state in ('failed', 'finished')
-       returning 1", shift
+     set finished = null, result = null, retried = now(),
+       retries = retries + 1, started = null, state = 'inactive',
+       worker = null
+     where id = ? and state in ('failed', 'finished')
+     returning 1", shift
   )->rows;
 }
 
@@ -169,29 +183,35 @@ sub unregister_worker {
   shift->pg->db->query('delete from minion_workers where id = ?', shift);
 }
 
-sub worker_info { shift->_workers->{shift() // ''} }
+sub worker_info {
+  shift->pg->db->query(
+    'select id, array(
+       select id from minion_jobs where worker = minion_workers.id
+     ) as jobs, host, pid, extract(epoch from started) as started
+     from minion_workers
+     where id = ?', shift
+  )->hash;
+}
 
 sub _try {
   my ($self, $id) = @_;
 
-  my $db = $self->pg->db;
-  my $tx = $db->begin;
-
-  return undef unless my $job = $db->query(
-    "select * from minion_jobs
-     where state = 'inactive' and delayed < now() and task = any (?)
-     order by priority desc, created
-     limit 1
-     for update", [keys %{$self->minion->tasks}]
-  )->hash;
-  $job->{args} = decode_json $job->{args};
-
-  $db->query(
+  return undef unless my $job = $self->pg->db->query(
     "update minion_jobs
      set started = now(), state = 'active', worker = ?
-     where id = ?", $id, $job->{id}
-  );
-  $tx->commit;
+     from (
+       select id
+       from minion_jobs
+       where state = 'inactive' and delayed < now() and task = any (?)
+         and pg_try_advisory_xact_lock(id)
+       order by priority desc, created
+       limit 1
+       for update
+     ) job
+     where minion_jobs.id = job.id
+     returning minion_jobs.id, args, task", $id, [keys %{$self->minion->tasks}]
+  )->hash;
+  $job->{args} = decode_json $job->{args};
 
   return $job;
 }
@@ -205,15 +225,6 @@ sub _update {
      where id = ? and state = 'active'
      returning 1", encode_json($result), $fail ? 'failed' : 'finished', $id
   )->rows;
-}
-
-sub _workers {
-  shift->pg->db->query(
-    'select id, array(
-       select id from minion_jobs where worker = minion_workers.id
-     ) as jobs, host, pid, extract(epoch from started) as started
-     from minion_workers'
-  )->hashes->reduce(sub { $a->{$b->{id}} = $b; $a }, {});
 }
 
 1;
@@ -424,6 +435,19 @@ create table if not exists minion_workers (
   pid int not null,
   started timestamp with time zone not null
 );
+create or replace function notify_minion_jobs_insert() returns trigger as $$
+  begin
+    perform pg_notify('minion.job', '');
+    return null;
+  end;
+$$ language plpgsql;
+set client_min_messages to warning;
+drop trigger if exists minion_jobs_insert_trigger on minion_jobs;
+set client_min_messages to notice;
+create trigger minion_jobs_insert_trigger after insert on minion_jobs
+  for each row execute procedure notify_minion_jobs_insert();
+
 -- 1 down
 drop table if exists minion_jobs;
+drop function if exists notify_minion_jobs_insert();
 drop table if exists minion_workers;
