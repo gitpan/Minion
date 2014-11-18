@@ -79,12 +79,9 @@ sub list_workers {
   my ($self, $offset, $limit) = @_;
 
   return $self->pg->db->query(
-    'select id
-     from minion_workers
-     order by id desc
-     limit ?
-     offset ?', $limit, $offset
-  )->arrays->map(sub { $self->worker_info($_->[0]) })->to_array;
+    'select id from minion_workers order by id desc limit ? offset ?',
+    $limit, $offset)->arrays->map(sub { $self->worker_info($_->[0]) })
+    ->to_array;
 }
 
 sub new {
@@ -428,13 +425,14 @@ create table if not exists minion_jobs (
   task text not null,
   worker bigint
 );
+create index on minion_jobs (priority DESC, created);
 create table if not exists minion_workers (
   id bigserial not null primary key,
   host text not null,
   pid int not null,
   started timestamp with time zone not null
 );
-create or replace function notify_minion_jobs_insert() returns trigger as $$
+create or replace function minion_jobs_insert_notify() returns trigger as $$
   begin
     perform pg_notify('minion.job', '');
     return null;
@@ -444,9 +442,9 @@ set client_min_messages to warning;
 drop trigger if exists minion_jobs_insert_trigger on minion_jobs;
 set client_min_messages to notice;
 create trigger minion_jobs_insert_trigger after insert on minion_jobs
-  for each row execute procedure notify_minion_jobs_insert();
+  for each row execute procedure minion_jobs_insert_notify();
 
 -- 1 down
 drop table if exists minion_jobs;
-drop function if exists notify_minion_jobs_insert();
+drop function if exists minion_jobs_insert_notify();
 drop table if exists minion_workers;
