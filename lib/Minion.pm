@@ -14,7 +14,7 @@ has 'backend';
 has remove_after => 864000;
 has tasks => sub { {} };
 
-our $VERSION = '1.0';
+our $VERSION = '1.01';
 
 sub add_task {
   my ($self, $name, $cb) = @_;
@@ -113,7 +113,34 @@ Minion - Job queue
 =head1 DESCRIPTION
 
 L<Minion> is a job queue for the L<Mojolicious|http://mojolicio.us> real-time
-web framework with support for multiple backends.
+web framework with support for multiple backends, such as L<DBM::Deep> and
+L<PostgreSQL|http://www.postgresql.org>.
+
+A job queue allows you to process time and/or computationally intensive tasks
+in background processes, outside of the request/response lifecycle. Among
+those tasks you'll commonly find image resizing, spam filtering, HTTP
+downloads, building tarballs, warming caches and basically everything else you
+can imagine that's not super fast.
+
+  use Mojolicious::Lite;
+
+  plugin Minion => {Pg => 'postgresql://sri:s3cret@localhost/test'};
+
+  # Slow task
+  app->minion->add_task(poke_mojo => sub {
+    my $job = shift;
+    $job->app->ua->get('mojolicio.us');
+    $job->app->log->debug('We have poked mojolicio.us for a visitor.');
+  });
+
+  # Perform job in a background worker process
+  get '/' => sub {
+    my $c = shift;
+    $c->minion->enqueue('poke_mojo');
+    $c->render(text => 'We will poke mojolicio.us for you soon.');
+  };
+
+  app->start;
 
 Background worker processes are usually started with the command
 L<Minion::Command::minion::worker>, which becomes automatically available when
