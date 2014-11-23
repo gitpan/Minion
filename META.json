@@ -34,7 +34,7 @@
       "runtime" : {
          "requires" : {
             "DBM::Deep" : "2.0011",
-            "Mojolicious" : "5.60",
+            "Mojolicious" : "5.64",
             "perl" : "5.010001"
          }
       }
@@ -53,5 +53,5 @@
       },
       "x_IRC" : "irc://irc.perl.org/#mojo"
    },
-   "version" : "1.01"
+   "version" : "1.02"
 }

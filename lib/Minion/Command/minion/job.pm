@@ -4,7 +4,7 @@ use Mojo::Base 'Mojolicious::Command';
 use Getopt::Long qw(GetOptionsFromArray :config no_auto_abbrev no_ignore_case);
 use Mojo::Date;
 use Mojo::JSON 'decode_json';
-use Mojo::Util 'dumper';
+use Mojo::Util qw(dumper tablify);
 
 has description => 'Manage Minion jobs.';
 has usage => sub { shift->extract_usage };
@@ -18,14 +18,14 @@ sub run {
     'a|args=s' => sub { $args = decode_json($_[1]) },
     'd|delay=i'    => \$options->{delay},
     'e|enqueue=s'  => \my $enqueue,
-    'L|limit=i'    => \(my $limit = 100),
+    'l|limit=i'    => \(my $limit = 100),
     'o|offset=i'   => \(my $offset = 0),
     'p|priority=i' => \$options->{priority},
-    'r|remove'     => \my $remove,
     'R|retry'      => \my $retry,
+    'r|remove'     => \my $remove,
+    'S|state=s'    => \$options->{state},
     's|stats'      => \my $stats,
     't|task=s'     => \$options->{task},
-    'T|state=s'    => \$options->{state},
     'w|workers'    => \my $workers;
   my $id = @args ? shift @args : undef;
 
@@ -35,15 +35,15 @@ sub run {
 
   # Show stats or list jobs/workers
   return $self->_stats if $stats;
-  my $sub = $workers ? \&_list_workers : \&_list_jobs;
-  return $self->$sub($offset, $limit, $options) unless $id;
+  return $self->_list_workers($offset, $limit) if $workers;
+  return $self->_list_jobs($offset, $limit, $options) unless defined $id;
   die "Job does not exist.\n" unless my $job = $self->app->minion->job($id);
 
   # Remove job
-  return $job->remove ? 1 : die "Job is active.\n" if $remove;
+  return $job->remove || die "Job is active.\n" if $remove;
 
   # Retry job
-  return $job->retry ? 1 : die "Job is active.\n" if $retry;
+  return $job->retry || die "Job is active.\n" if $retry;
 
   # Job info
   $self->_info($job);
@@ -55,8 +55,8 @@ sub _info {
   # Details
   my $info = $job->info;
   my ($state, $priority, $retries) = @$info{qw(state priority retries)};
-  print $info->{task}, " ($state, p$priority, r$retries)\n",
-    dumper($info->{args});
+  say $info->{task}, " ($state, p$priority, r$retries)";
+  print dumper $info->{args};
   if (my $result = $info->{result}) { print dumper $result }
 
   # Timing
@@ -72,16 +72,13 @@ sub _info {
 }
 
 sub _list_jobs {
-  my ($self, $offset, $limit, $options) = @_;
-  say sprintf '%s  %-8s  %s', @$_{qw(id state task)}
-    for @{$self->app->minion->backend->list_jobs($offset, $limit, $options)};
+  my $jobs = shift->app->minion->backend->list_jobs(@_);
+  print tablify [map { [@$_{qw(id state task)}] } @$jobs];
 }
 
 sub _list_workers {
-  my ($self, $offset, $limit) = @_;
-  say sprintf '%s  %-8s  %s', $_->{id}, @{$_->{jobs}} ? 'active' : 'inactive',
-    "$_->{host}:$_->{pid}"
-    for @{$self->app->minion->backend->list_workers($offset, $limit)};
+  my $workers = shift->app->minion->backend->list_workers(@_);
+  print tablify [map { [_worker()] } @$workers];
 }
 
 sub _stats {
@@ -92,6 +89,10 @@ sub _stats {
   say "Active jobs:      $stats->{active_jobs}";
   say "Failed jobs:      $stats->{failed_jobs}";
   say "Finished jobs:    $stats->{finished_jobs}";
+}
+
+sub _worker {
+  $_->{id}, @{$_->{jobs}} ? 'active' : 'inactive', "$_->{host}:$_->{pid}";
 }
 
 1;
@@ -107,28 +108,29 @@ Minion::Command::minion::job - Minion job command
   Usage: APPLICATION minion job [ID]
 
     ./myapp.pl minion job
-    ./myapp.pl minion job -t test -T inactive
+    ./myapp.pl minion job -t test -S inactive
     ./myapp.pl minion job -e foo -a '[23, "bar"]'
     ./myapp.pl minion job -e foo -p 5
     ./myapp.pl minion job -s
-    ./myapp.pl minion job -w -L 5
+    ./myapp.pl minion job -w -l 5
     ./myapp.pl minion job acbd18db4cc2f85cedef654fccc4a4d8
     ./myapp.pl minion job acbd18db4cc2f85cedef654fccc4a4d8 -r
+    ./myapp.pl minion job acbd18db4cc2f85cedef654fccc4a4d8 -R
 
   Options:
     -a, --args <JSON array>   Arguments for new job in JSON format.
     -d, --delay <seconds>     Delay new job for this many seconds.
     -e, --enqueue <name>      New job to be enqueued.
-    -L, --limit <number>      Number of jobs/workers to show when listing
+    -l, --limit <number>      Number of jobs/workers to show when listing
                               them, defaults to 100.
     -o, --offset <number>     Number of jobs/workers to skip when listing
                               them, defaults to 0.
     -p, --priority <number>   Priority of new job, defaults to 0.
-    -r, --remove              Remove job.
     -R, --retry               Retry job.
+    -r, --remove              Remove job.
+    -S, --state <state>       List only jobs in this state.
     -s, --stats               Show queue statistics.
     -t, --task <name>         List only jobs for this task.
-    -T, --state <state>       List only jobs in this state.
     -w, --workers             List workers instead of jobs.
 
 =head1 DESCRIPTION

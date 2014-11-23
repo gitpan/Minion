@@ -20,7 +20,7 @@ no_index:
     - t
 requires:
   DBM::Deep: '2.0011'
-  Mojolicious: '5.60'
+  Mojolicious: '5.64'
   perl: '5.010001'
 resources:
   IRC: irc://irc.perl.org/#mojo
@@ -28,4 +28,4 @@ resources:
   homepage: http://mojolicio.us
   license: http://www.opensource.org/licenses/artistic-license-2.0
   repository: https://github.com/kraih/minion.git
-version: '1.01'
+version: '1.02'
