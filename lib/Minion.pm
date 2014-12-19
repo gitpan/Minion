@@ -14,7 +14,7 @@ has 'backend';
 has remove_after => 864000;
 has tasks => sub { {} };
 
-our $VERSION = '1.02';
+our $VERSION = '1.03';
 
 sub add_task {
   my ($self, $name, $cb) = @_;
@@ -107,7 +107,9 @@ Minion - Job queue
 
   # Build more sophisticated workers
   my $worker = $minion->repair->worker->register;
-  if (my $job = $worker->dequeue(5)) { $job->perform }
+  while (int rand 2) {
+    if (my $job = $worker->dequeue(5)) { $job->perform }
+  }
   $worker->unregister;
 
 =head1 DESCRIPTION
