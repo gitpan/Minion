@@ -14,7 +14,7 @@ has 'backend';
 has remove_after => 864000;
 has tasks => sub { {} };
 
-our $VERSION = '1.03';
+our $VERSION = '1.04';
 
 sub add_task {
   my ($self, $name, $cb) = @_;
@@ -308,7 +308,7 @@ Brian Medley
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2014, Sebastian Riedel.
+Copyright (C) 2014-2015, Sebastian Riedel.
 
 This program is free software, you can redistribute it and/or modify it under
 the terms of the Artistic License version 2.0.
